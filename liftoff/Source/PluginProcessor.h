@@ -7,6 +7,8 @@ namespace liftoff
 {
 inline const juce::StringArray delayNames { "1/4", "1/8", "1/8 D", "1/16", "1/4 D", "1/8 T" };
 inline const float delayBeats[] { 1.0f, 0.5f, 0.75f, 0.25f, 1.5f, 1.0f / 3.0f };
+inline const juce::StringArray lenNames { "1 bar", "2 bars", "4 bars", "8 bars", "16 bars" };
+inline const double lenBars[] { 1, 2, 4, 8, 16 };
 
 // Where the low-cut sits for a given build (0..1) and filter amount (0..1).
 inline float cutoffFor (float build, float amount) { return 20.0f * std::pow (2.0f, std::pow (build, 1.4f) * amount * 7.2f); }
@@ -40,7 +42,7 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
     // UI telemetry
-    std::atomic<float> uiBuild { 0 }, uiCutoff { 20 }, uiQ { 0.707f }, uiLevel { 0 }, bpm { 120 };
+    std::atomic<float> uiBuild { 0 }, uiCutoff { 20 }, uiQ { 0.707f }, uiLevel { 0 }, bpm { 120 }, uiBar { -1 }, uiAuto { 0 };
 
 private:
     float p (const char* id) const { return apvts.getRawParameterValue (id)->load(); }

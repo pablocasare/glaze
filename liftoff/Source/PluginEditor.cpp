@@ -405,21 +405,36 @@ void RocketDial::paint (juce::Graphics& g)
     g.setFont (logo (24.0f));
     g.setColour (c::text);
     g.drawText ("build " + juce::String (juce::roundToInt (bb * 100)) + "%", lbl, juce::Justification::centred);
+    g.setFont (mono (9.5f)); g.setColour (c::dim);
+    g.drawText ("drag  |  right-click = automate", lbl.translated (0, 26).withHeight (14), juce::Justification::centred);
 }
 
-void RocketDial::mouseDown (const juce::MouseEvent&)
+void RocketDial::mouseDown (const juce::MouseEvent& e)
 {
     auto* p = proc.apvts.getParameter ("build");
+    if (e.mods.isPopupMenu())
+    {
+        // the DAW's own parameter menu (FL: "Create automation clip", Ableton/Logic: automate, MIDI learn...)
+        if (auto* ed = findParentComponentOfClass<juce::AudioProcessorEditor>())
+            if (auto* ctx = ed->getHostContext())
+                if (auto menu = ctx->getContextMenuForParameter (p))
+                {
+                    menu->showNativeMenu (ed->getLocalPoint (this, e.getPosition()));
+                    return;
+                }
+        return;
+    }
     startDragValue = p->convertFrom0to1 (p->getValue());
     p->beginChangeGesture();
 }
 void RocketDial::mouseDrag (const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu()) return;
     auto* p = proc.apvts.getParameter ("build");
     const float v = juce::jlimit (0.0f, 100.0f, startDragValue - (float) e.getDistanceFromDragStartY() * 0.5f + (float) e.getDistanceFromDragStartX() * 0.15f);
     p->setValueNotifyingHost (p->convertTo0to1 (v));
 }
-void RocketDial::mouseUp (const juce::MouseEvent&) { proc.apvts.getParameter ("build")->endChangeGesture(); }
+void RocketDial::mouseUp (const juce::MouseEvent& e) { if (! e.mods.isPopupMenu()) proc.apvts.getParameter ("build")->endChangeGesture(); }
 void RocketDial::mouseDoubleClick (const juce::MouseEvent&)
 {
     auto* p = proc.apvts.getParameter ("build");
@@ -485,20 +500,97 @@ void HoldButton::tick (float dt)
     p->setValueNotifyingHost (juce::jmin (1.0f, p->getValue() + dt / 4.0f)); // full build in ~4 s
 }
 
+
 // ---------------------------------------------------------------------------
-LiftoffEditor::LiftoffEditor (LiftoffProcessor& p) : AudioProcessorEditor (p), proc (p), dial (p), graph (p), hold (p)
+AutoRow::AutoRow (LiftoffProcessor& p) : proc (p)
+{
+    len.addItemList (liftoff::lenNames, 1);
+    lenAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, "autoLen", len);
+    addAndMakeVisible (len);
+}
+int AutoRow::bar() const { return juce::roundToInt (proc.apvts.getRawParameterValue ("dropBar")->load()); }
+void AutoRow::setBar (int b)
+{
+    auto* prm = proc.apvts.getParameter ("dropBar");
+    prm->setValueNotifyingHost (prm->convertTo0to1 ((float) juce::jlimit (2, 999, b)));
+    repaint();
+}
+void AutoRow::resized()
+{
+    auto r = getLocalBounds().toFloat().reduced (10, 6);
+    togR = r.removeFromLeft (128); r.removeFromLeft (14);
+    r.removeFromLeft (84); // "drop at bar" label
+    minusR = r.removeFromLeft (26); numR = r.removeFromLeft (52); plusR = r.removeFromLeft (26);
+    r.removeFromLeft (16);
+    r.removeFromLeft (80); // "build over" label
+    len.setBounds (r.removeFromLeft (100).toNearestInt());
+    r.removeFromLeft (14);
+    statusR = r;
+}
+void AutoRow::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (1);
+    g.setColour (c::card); g.fillRoundedRectangle (r, 12);
+    g.setColour (c::edge); g.drawRoundedRectangle (r, 12, 1);
+    const bool on = proc.apvts.getRawParameterValue ("autoOn")->load() > 0.5f;
+    // toggle
+    g.setColour (on ? c::blue : c::bg); g.fillRoundedRectangle (togR, togR.getHeight() * 0.5f);
+    g.setColour (on ? c::blue : c::edge); g.drawRoundedRectangle (togR, togR.getHeight() * 0.5f, 1);
+    g.setColour (on ? juce::Colours::white : c::dim); g.setFont (mono (11.0f));
+    g.drawText (on ? "AUTO BUILD: ON" : "AUTO BUILD: OFF", togR, juce::Justification::centred);
+    // drop bar
+    g.setColour (on ? c::text : c::dim); g.setFont (mono (10.5f));
+    g.drawText ("drop at bar", Rectangle<float> (minusR.getX() - 84, minusR.getY(), 80, minusR.getHeight()), juce::Justification::centredRight);
+    g.drawText ("build over", Rectangle<float> ((float) len.getX() - 80, minusR.getY(), 76, minusR.getHeight()), juce::Justification::centredRight);
+    g.setColour (c::bg); g.fillRoundedRectangle (minusR.getUnion (plusR), 6);
+    g.setColour (c::edge); g.drawRoundedRectangle (minusR.getUnion (plusR), 6, 1);
+    g.setColour (c::blue); g.setFont (mono (15.0f));
+    g.drawText ("-", minusR, juce::Justification::centred); g.drawText ("+", plusR, juce::Justification::centred);
+    g.setColour (c::text); g.setFont (mono (13.0f));
+    g.drawText (juce::String (bar()), numR, juce::Justification::centred);
+    // live status
+    juce::String st;
+    const float b = proc.uiBar.load(), a = proc.uiAuto.load();
+    const int lenBars = (int) liftoff::lenBars[juce::jlimit (0, 4, (int) proc.apvts.getRawParameterValue ("autoLen")->load())];
+    const int start = bar() - lenBars;
+    if (! on) st = "turn on: builds bars " + juce::String (juce::jmax (1, start)) + "-" + juce::String (bar()) + ", drops on " + juce::String (bar());
+    else if (b < 0) st = "press play";
+    else if (a > 0) st = "bar " + juce::String (b, 1) + "  |  building " + juce::String (juce::roundToInt (a * 100)) + "%";
+    else if (b < start) st = "bar " + juce::String (b, 1) + "  |  builds from bar " + juce::String (start);
+    else st = "bar " + juce::String (b, 1) + "  |  dropped!";
+    g.setColour (on ? (a > 0 ? c::orange : c::text) : c::dim); g.setFont (mono (10.5f));
+    g.drawFittedText (st, statusR.toNearestInt(), juce::Justification::centredLeft, 2);
+}
+void AutoRow::mouseDown (const juce::MouseEvent& e)
+{
+    draggingNum = false;
+    if (togR.contains (e.position))
+    {
+        auto* prm = proc.apvts.getParameter ("autoOn");
+        prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->getValue() > 0.5f ? 0.0f : 1.0f); prm->endChangeGesture();
+        repaint();
+    }
+    else if (minusR.contains (e.position)) setBar (bar() - (e.mods.isShiftDown() ? 8 : 1));
+    else if (plusR.contains (e.position))  setBar (bar() + (e.mods.isShiftDown() ? 8 : 1));
+    else if (numR.contains (e.position)) { draggingNum = true; dragStartBar = bar(); }
+}
+void AutoRow::mouseDrag (const juce::MouseEvent& e) { if (draggingNum) setBar (dragStartBar - e.getDistanceFromDragStartY() / 6); }
+void AutoRow::mouseUp (const juce::MouseEvent&) { draggingNum = false; }
+
+// ---------------------------------------------------------------------------
+LiftoffEditor::LiftoffEditor (LiftoffProcessor& p) : AudioProcessorEditor (p), proc (p), dial (p), graph (p), hold (p), autoRow (p)
 {
     gL = &lnf;
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
     setLookAndFeel (&lnf);
-    addAndMakeVisible (dial); addAndMakeVisible (graph); addAndMakeVisible (hold);
+    addAndMakeVisible (dial); addAndMakeVisible (graph); addAndMakeVisible (hold); addAndMakeVisible (autoRow);
     delayTime.addItemList (liftoff::delayNames, 1);
     delayAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, "delayTime", delayTime);
     addAndMakeVisible (delayTime);
     const char* specs[][3] { { "filter", "filterOn", "filter" }, { "resonance", "resOn", "reso" }, { "delay", "delayOn", "delay" },
                              { "reverb", "reverbOn", "reverb" }, { "noise", "noiseOn", "noise" }, { "output", "", "output" } };
     for (auto& s : specs) { cards.push_back (std::make_unique<lui::Card> (p.apvts, s[0], s[1], s[2])); addAndMakeVisible (*cards.back()); }
-    setSize (800, 450);
+    setSize (800, 504);
     startTimerHz (60);
 }
 LiftoffEditor::~LiftoffEditor() { stopTimer(); juce::LookAndFeel::setDefaultLookAndFeel (nullptr); setLookAndFeel (nullptr); }
@@ -508,6 +600,7 @@ void LiftoffEditor::timerCallback()
     hold.tick (1.0f / 60.0f);
     dial.tick (1.0f / 60.0f);
     dial.repaint(); graph.repaint();
+    static int m = 0; if (++m % 6 == 0) autoRow.repaint();
     repaint (getWidth() / 2 - 140, 14, 280, 34); // status pill
     static int n = 0; if (++n % 10 == 0) for (auto& cd : cards) cd->repaint();
 }
@@ -547,4 +640,5 @@ void LiftoffEditor::resized()
     const int cw = (w - 5 * 8) / 6;
     for (size_t i = 0; i < cards.size(); ++i) cards[i]->setBounds (x0 + (int) i * (cw + 8), 66, cw, 170);
     graph.setBounds (x0, 248, w, 180);
+    autoRow.setBounds (24, 444, getWidth() - 48, 44);
 }

@@ -19,6 +19,10 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     bo ("filterOn", "Filter On"); bo ("resOn", "Resonance On"); bo ("delayOn", "Delay On");
     bo ("reverbOn", "Reverb On"); bo ("noiseOn", "Noise On");
     v.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "delayTime", 1 }, "Delay Time", liftoff::delayNames, 0));
+    // Auto build: ramps up over N bars and drops on the chosen bar, no automation needed
+    v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "autoOn", 1 }, "Auto Build", false));
+    v.push_back (std::make_unique<AudioParameterInt> (ParameterID { "dropBar", 1 }, "Drop Bar", 2, 999, 17));
+    v.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "autoLen", 1 }, "Build Length", liftoff::lenNames, 3));
     return { v.begin(), v.end() };
 }
 
@@ -69,16 +73,34 @@ void LiftoffProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         return;
     }
 
+    float autoBuild = 0.0f;
+    double barNow = -1;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
+        {
             if (auto b = pos->getBpm()) bpm.store ((float) *b);
+            if (auto q = pos->getPpqPosition())
+            {
+                double beatsPerBar = 4.0;
+                if (auto ts = pos->getTimeSignature()) if (ts->numerator > 0 && ts->denominator > 0) beatsPerBar = ts->numerator * 4.0 / ts->denominator;
+                barNow = *q / beatsPerBar + 1.0; // 1-based, like FL's bar numbers
+                if (on ("autoOn") && pos->getIsPlaying())
+                {
+                    const double len = liftoff::lenBars[juce::jlimit (0, 4, (int) p ("autoLen"))];
+                    const double prog = (barNow - (p ("dropBar") - len)) / len;
+                    if (prog >= 0.0 && prog < 1.0) autoBuild = (float) prog;
+                }
+            }
+        }
+    uiBar.store ((float) barNow);
+    uiAuto.store (autoBuild);
 
     const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
     float* L = buffer.getWritePointer (0);
     float* R = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
     if (R != nullptr && numIn < 2) std::copy (L, L + num, R); // mono in -> stereo out
 
-    const float buildTarget = p ("build") * 0.01f;
+    const float buildTarget = std::max (p ("build") * 0.01f, autoBuild);
     const float filterAmt = on ("filterOn") ? p ("filter") * 0.01f : 0.0f;
     const float resAmt    = on ("resOn") ? p ("resonance") * 0.01f : 0.0f;
     const float delayAmt  = on ("delayOn") ? p ("delay") * 0.01f : 0.0f;

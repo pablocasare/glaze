@@ -12,8 +12,13 @@ USE
     low cut sweeps up (+ resonance), delay + reverb grow, white-noise riser rises.
     At 0% it's completely clean, and the tails are cut the moment you drop so it hits dry.
 
-  Automate it in FL Studio: right-click the BUILD dial (or drag it once, then
-  Tools > Last tweaked > Create automation clip). Draw a ramp up, then a straight drop to 0.
+  EASIEST - AUTO BUILD (no automation needed):
+    Turn on AUTO BUILD, set "drop at bar" to the bar your drop starts on, pick how long
+    the build is (e.g. 8 bars). Press play: it builds over those bars and drops on that bar.
+
+  Or automate it in FL Studio: drag the BUILD dial once, then
+  Tools > Last tweaked > Create automation clip (or right-click the dial).
+  Or record it: arm recording with Automation on, press play, hold HOLD TO BUILD, let go on the drop.
 
   Quick test without automation: hold the HOLD TO BUILD button, let go to drop.
   The cards switch each effect on/off (click the dot) and set how much BUILD affects it.

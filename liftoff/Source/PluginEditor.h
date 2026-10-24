@@ -66,6 +66,26 @@ private:
     LiftoffProcessor& proc;
 };
 
+// Auto build row: on/off, drop bar, length, live status
+class AutoRow : public juce::Component
+{
+public:
+    explicit AutoRow (LiftoffProcessor&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+private:
+    void setBar (int);
+    int bar() const;
+    LiftoffProcessor& proc;
+    juce::ComboBox len;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lenAtt;
+    juce::Rectangle<float> togR, minusR, numR, plusR, statusR;
+    int dragStartBar = 0; bool draggingNum = false;
+};
+
 // Hold to build, let go to drop
 class HoldButton : public juce::Component
 {
@@ -96,6 +116,7 @@ private:
     lui::RocketDial dial;
     lui::Graph graph;
     lui::HoldButton hold;
+    lui::AutoRow autoRow;
     juce::ComboBox delayTime;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> delayAtt;
     std::vector<std::unique_ptr<lui::Card>> cards;

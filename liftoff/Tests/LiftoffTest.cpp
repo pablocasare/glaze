@@ -66,6 +66,20 @@ int main (int, char** argv)
         check (tail < -80.0f, "drop: delay/reverb/noise tails cut after drop (dBFS)", tail);
     }
 
+    // 3b) auto build: drop at bar 17 over 8 bars (4/4 at 128 bpm)
+    {
+        LiftoffProcessor p; Head h; p.setPlayHead (&h);
+        setP (p, "autoOn", 1); setP (p, "dropBar", 17); setP (p, "autoLen", 3);
+        p.prepareToPlay (sr, block);
+        juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer m;
+        auto at = [&] (double bar) { h.ppq = (bar - 1.0) * 4.0; buf.clear(); p.processBlock (buf, m); return p.uiAuto.load(); };
+        const float a5 = at (5.0), a9 = at (9.01), a13 = at (13.0), a169 = at (16.9), a171 = at (17.05);
+        check (a5 == 0.0f && a9 < 0.01f, "auto: silent before bar 9", a5 + a9);
+        check (std::abs (a13 - 0.5f) < 0.01f, "auto: 50% built at bar 13", a13);
+        check (a169 > 0.97f, "auto: ~100% just before the drop (bar 16.9)", a169);
+        check (a171 == 0.0f, "auto: drops to 0 on bar 17", a171);
+    }
+
     // 4) UI frames: build up over 4 s, drop, aftermath
     const juce::File outDir (argv[1] ? argv[1] : ".");
     {
