@@ -25,8 +25,13 @@ jobs:
           -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 
-      - name: Build
+      - name: Build Glaze
         run: cmake --build build --config Release --target Glaze_VST3 Glaze_AU Glaze_Standalone
+
+      - name: Build Pump (sidechain)
+        run: |
+          cmake -S pump -B build-pump -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-pump --config Release --target Pump_VST3 Pump_AU
 
       - name: Ad-hoc sign
         run: |
@@ -34,20 +39,27 @@ jobs:
           codesign --force --deep --sign - "$A/VST3/Glaze.vst3"
           codesign --force --deep --sign - "$A/AU/Glaze.component"
           codesign --force --deep --sign - "$A/Standalone/Glaze.app"
+          P=build-pump/Pump_artefacts/Release
+          codesign --force --deep --sign - "$P/VST3/Pump.vst3"
+          codesign --force --deep --sign - "$P/AU/Pump.component"
 
       - name: Validate Audio Unit (auval)
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
           cp -R build/Glaze_artefacts/Release/AU/Glaze.component ~/Library/Audio/Plug-Ins/Components/
+          cp -R build-pump/Pump_artefacts/Release/AU/Pump.component ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar 2>/dev/null || true
           sleep 2
           auval -v aufx Glz1 Glzz
+          auval -v aufx Pmp1 Glzz
 
       - name: Package
         run: |
           A=build/Glaze_artefacts/Release
           mkdir -p dist/Glaze
           cp -R "$A/VST3/Glaze.vst3" "$A/AU/Glaze.component" "$A/Standalone/Glaze.app" dist/Glaze/
+          P=build-pump/Pump_artefacts/Release
+          cp -R "$P/VST3/Pump.vst3" "$P/AU/Pump.component" dist/Glaze/
           cp "packaging/Install Glaze.command" dist/Glaze/
           cp packaging/README.txt dist/Glaze/
           chmod +x "dist/Glaze/Install Glaze.command"
