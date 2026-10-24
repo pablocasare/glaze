@@ -80,20 +80,44 @@ int main (int, char** argv)
         check (triggers == 1, "sidechain: one kick = exactly one duck", (float) triggers);
     }
 
-    // ---------- UI snapshots ----------
+    // ---------- UI snapshots + animation frames ----------
     const juce::File out (argv[1] ? argv[1] : ".");
     for (int mode = 0; mode < 2; ++mode)
     {
         PumpProcessor p; FakeHead head; p.setPlayHead (&head);
         p.setRateAndBufferSizeDetails (sr, block); p.prepareToPlay (sr, block);
         setP (p, "mode", (float) mode);
-        juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer m;
-        for (int b = 0; b < 30; ++b) { buf.clear(); p.processBlock (buf, m); head.ppq += block * 2.0 / sr; }
         std::unique_ptr<PumpEditor> ed (dynamic_cast<PumpEditor*> (p.createEditor()));
-        ed->timerCallback();
-        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
-        auto f = out.getChildFile (mode == 0 ? "pump_tempo.png" : "pump_sidechain.png");
-        f.deleteFile(); juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        juce::AudioBuffer<float> buf (2, block); juce::MidiBuffer m;
+        auto save = [&] (const juce::String& name)
+        {
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f = out.getChildFile (name); f.getParentDirectory().createDirectory();
+            f.deleteFile(); juce::FileOutputStream os (f); juce::PNGImageFormat().writeImageToStream (img, os);
+        };
+        const int framesTotal = mode == 0 ? 330 : 2;
+        bool savedSlam = false, savedFat = false, savedPop = false;
+        for (int fr = 0; fr < framesTotal; ++fr)
+        {
+            for (int b = 0; b < 6; ++b) // ~1/60 s of audio per UI frame
+            {
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < block; ++i) buf.setSample (c, i, 0.5f);
+                p.processBlock (buf, m);
+                head.ppq += block * 2.0 / sr;
+            }
+            ed->timerCallback();
+            auto& st = ed->getStage();
+            if (mode == 0)
+            {
+                if (fr % 2 == 0) save ("anim/f" + juce::String (fr / 2).paddedLeft ('0', 4) + ".png");
+                const double ph = std::fmod (head.ppq, 1.0);
+                if (! savedSlam && st.strokes == 2 && ph > 0.06 && ph < 0.12) { save ("pump_slam.png"); savedSlam = true; }
+                if (! savedFat && st.strokes == 6 && ph > 0.5) { save ("pump_inflated.png"); savedFat = true; }
+                if (! savedPop && st.isPopping()) { for (int k = 0; k < 6; ++k) ed->timerCallback(); save ("pump_pop.png"); savedPop = true; }
+            }
+        }
+        check (mode == 1 || (savedSlam && savedFat && savedPop), "animation: slam / inflate / pop frames reached", (float) mode);
+        if (mode == 1) save ("pump_sidechain.png");
     }
     std::printf (failures ? "\n%d FAILURES\n" : "\nALL TESTS PASSED\n", failures);
     return failures;

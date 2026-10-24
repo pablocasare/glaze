@@ -53,10 +53,11 @@ Fonts: Righteous and Space Mono, SIL Open Font License (see `Resources/`).
 
 Simple sidechain / volume-ducking plugin (VST3 / AU), in `pump/`.
 
-![pump](pump/docs/pump_tempo.png)
+![pump](pump/docs/pump_inflated.png)
 
 - **Tempo** mode: tempo-synced duck (1/16 to 2 bars), locked to the DAW grid. No routing.
 - **Sidechain** mode: triggered by a kick on the sidechain input, with threshold.
 - Depth, Length, Curve, Threshold, Mix. Drag the dots on the curve. Click-free.
+- A floor pump slams down on every duck and inflates a rubber duck; 8 pumps and it **pops**. Click the duck to pop it early.
 
 Built and shipped by the same GitHub Actions workflow; it's inside the same `Glaze-mac` zip.
