@@ -61,3 +61,13 @@ Simple sidechain / volume-ducking plugin (VST3 / AU), in `pump/`.
 - A floor pump slams down on every duck and inflates a rubber duck; 8 pumps and it **pops**. Click the duck to pop it early.
 
 Built and shipped by the same GitHub Actions workflow; it's inside the same `Glaze-mac` zip.
+
+---
+
+# liftoff
+
+Buildup plugin (VST3 / AU), in `liftoff/`. One **BUILD** macro: low cut + resonance sweep up, delay and reverb grow,
+a white-noise riser rises. Snap it to 0 on the drop and the tails are cut so the drop hits clean.
+A cartoon rocket reacts: chillin' -> building -> screaming -> hovering at 100% -> blasts off on the drop.
+
+![liftoff](liftoff/docs/liftoff_max.png)
