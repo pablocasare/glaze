@@ -36,7 +36,6 @@ jobs:
           codesign --force --deep --sign - "$A/Standalone/Glaze.app"
 
       - name: Validate Audio Unit (auval)
-        continue-on-error: true
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
           cp -R build/Glaze_artefacts/Release/AU/Glaze.component ~/Library/Audio/Plug-Ins/Components/
