@@ -63,15 +63,27 @@ jobs:
           cp "packaging/Install Glaze.command" dist/Glaze/
           cp packaging/README.txt dist/Glaze/
           chmod +x "dist/Glaze/Install Glaze.command"
-          cd dist && ditto -c -k --keepParent Glaze Glaze-mac.zip
+          mkdir -p dist/Pump
+          cp -R "$P/VST3/Pump.vst3" "$P/AU/Pump.component" dist/Pump/
+          cp "packaging/Install Pump.command" dist/Pump/
+          cp packaging/README-Pump.txt dist/Pump/README.txt
+          chmod +x "dist/Pump/Install Pump.command"
+          cd dist && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: Glaze-mac
           path: dist/Glaze-mac.zip
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pump-mac
+          path: dist/Pump-mac.zip
+
       - name: Publish release (when a v* tag is pushed)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Glaze-mac.zip
+          files: |
+            dist/Glaze-mac.zip
+            dist/Pump-mac.zip
