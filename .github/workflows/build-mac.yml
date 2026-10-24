@@ -1,0 +1,66 @@
+name: Build Glaze (macOS VST3 + AU)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: brew install ninja || true
+
+      - name: Configure (universal: Apple Silicon + Intel)
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: cmake --build build --config Release --target Glaze_VST3 Glaze_AU Glaze_Standalone
+
+      - name: Ad-hoc sign
+        run: |
+          A=build/Glaze_artefacts/Release
+          codesign --force --deep --sign - "$A/VST3/Glaze.vst3"
+          codesign --force --deep --sign - "$A/AU/Glaze.component"
+          codesign --force --deep --sign - "$A/Standalone/Glaze.app"
+
+      - name: Validate Audio Unit (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/Glaze_artefacts/Release/AU/Glaze.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 2
+          auval -v aufx Glz1 Glzz
+
+      - name: Package
+        run: |
+          A=build/Glaze_artefacts/Release
+          mkdir -p dist/Glaze
+          cp -R "$A/VST3/Glaze.vst3" "$A/AU/Glaze.component" "$A/Standalone/Glaze.app" dist/Glaze/
+          cp "packaging/Install Glaze.command" dist/Glaze/
+          cp packaging/README.txt dist/Glaze/
+          chmod +x "dist/Glaze/Install Glaze.command"
+          cd dist && ditto -c -k --keepParent Glaze Glaze-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Glaze-mac
+          path: dist/Glaze-mac.zip
+
+      - name: Publish release (when a v* tag is pushed)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Glaze-mac.zip
