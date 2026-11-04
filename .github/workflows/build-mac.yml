@@ -38,6 +38,11 @@ jobs:
           cmake -S liftoff -B build-liftoff -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cmake --build build-liftoff --config Release --target Liftoff_VST3 Liftoff_AU
 
+      - name: Build Undertow (bassline generator)
+        run: |
+          cmake -S undertow -B build-undertow -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake --build build-undertow --config Release --target Undertow_VST3 Undertow_AU
+
       - name: Ad-hoc sign
         run: |
           A=build/Glaze_artefacts/Release
@@ -50,6 +55,9 @@ jobs:
           F=build-liftoff/Liftoff_artefacts/Release
           codesign --force --deep --sign - "$F/VST3/Liftoff.vst3"
           codesign --force --deep --sign - "$F/AU/Liftoff.component"
+          U=build-undertow/Undertow_artefacts/Release
+          codesign --force --deep --sign - "$U/VST3/Undertow.vst3"
+          codesign --force --deep --sign - "$U/AU/Undertow.component"
 
       - name: Validate Audio Unit (auval)
         run: |
@@ -57,11 +65,13 @@ jobs:
           cp -R build/Glaze_artefacts/Release/AU/Glaze.component ~/Library/Audio/Plug-Ins/Components/
           cp -R build-pump/Pump_artefacts/Release/AU/Pump.component ~/Library/Audio/Plug-Ins/Components/
           cp -R build-liftoff/Liftoff_artefacts/Release/AU/Liftoff.component ~/Library/Audio/Plug-Ins/Components/
+          cp -R build-undertow/Undertow_artefacts/Release/AU/Undertow.component ~/Library/Audio/Plug-Ins/Components/
           killall -9 AudioComponentRegistrar 2>/dev/null || true
           sleep 2
           auval -v aufx Glz1 Glzz
           auval -v aufx Pmp1 Glzz
           auval -v aufx Lft1 Glzz
+          auval -v aumu Udtw Tkwz
 
       - name: Package
         run: |
@@ -84,7 +94,13 @@ jobs:
           cp "packaging/Install Liftoff.command" dist/Liftoff/
           cp packaging/README-Liftoff.txt dist/Liftoff/README.txt
           chmod +x "dist/Liftoff/Install Liftoff.command"
-          cd dist && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip && ditto -c -k --keepParent Liftoff Liftoff-mac.zip
+          U=build-undertow/Undertow_artefacts/Release
+          mkdir -p dist/Undertow
+          cp -R "$U/VST3/Undertow.vst3" "$U/AU/Undertow.component" dist/Undertow/
+          cp "packaging/Install Undertow.command" dist/Undertow/
+          cp packaging/README-Undertow.txt dist/Undertow/README.txt
+          chmod +x "dist/Undertow/Install Undertow.command"
+          cd dist && ditto -c -k --keepParent Undertow Undertow-mac.zip && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip && ditto -c -k --keepParent Liftoff Liftoff-mac.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -101,6 +117,11 @@ jobs:
           name: Liftoff-mac
           path: dist/Liftoff-mac.zip
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Undertow-mac
+          path: dist/Undertow-mac.zip
+
       - name: Publish release (when a v* tag is pushed)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -109,3 +130,4 @@ jobs:
             dist/Glaze-mac.zip
             dist/Pump-mac.zip
             dist/Liftoff-mac.zip
+            dist/Undertow-mac.zip
