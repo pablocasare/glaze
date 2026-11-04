@@ -4,3 +4,4 @@ shots/
 dist/
 *.wav
 .DS_Store
+demo/
