@@ -2,7 +2,7 @@
 #include "BinaryData.h"
 
 using namespace utui;
-static constexpr int W = 1160, H = 680;
+static constexpr int W = 1160, H = 760;
 
 Fonts::Fonts()
 {
@@ -213,6 +213,12 @@ void Roll::paint (juce::Graphics& g)
         {
             g.setColour (col::lime.withAlpha (0.35f * fl)); g.fillRoundedRectangle (r.expanded (6 * fl), 7);
         }
+        if (n.ghost)
+        {
+            g.setColour (col::lime.withAlpha (0.18f + 0.5f * fl)); g.fillRoundedRectangle (r, 4);
+            g.setColour (col::lime.withAlpha (0.7f)); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.2f);
+            continue;
+        }
         g.setGradientFill (juce::ColourGradient (col::lime.interpolatedWith (col::cream, fl).withMultipliedBrightness (0.75f + 0.25f * v), r.getX(), r.getY(),
                                                  col::limeDim.interpolatedWith (col::lime, 0.4f + 0.6f * fl), r.getX(), r.getBottom(), false));
         g.fillRoundedRectangle (r, 4);
@@ -282,7 +288,7 @@ UndertowEditor::UndertowEditor (UndertowProcessor& p) : AudioProcessorEditor (&p
     for (int i = 0; i < ut::NumStyles; ++i)
     {
         auto c = std::make_unique<Chip> (fonts, ut::styleName (i));
-        c->sub = juce::String ("0") + juce::String (i + 1);
+        c->sub = juce::String (i + 1).paddedLeft ('0', 2);
         c->onClick = [this, i] {
             auto* prm = proc.apvts.getParameter ("style");
             prm->beginChangeGesture(); prm->setValueNotifyingHost (prm->convertTo0to1 ((float) i)); prm->endChangeGesture();
@@ -291,7 +297,7 @@ UndertowEditor::UndertowEditor (UndertowProcessor& p) : AudioProcessorEditor (&p
     }
     auto& st = proc.apvts;
     const std::pair<const char*, const char*> ks[] = { { "density", "Density" }, { "movement", "Movement" }, { "variation", "Variation" }, { "gate", "Length" },
-                                                         { "swing", "Swing" }, { "glide", "Glide" }, { "tone", "Tone" }, { "drive", "Drive" }, { "volume", "Volume" } };
+                                                         { "swing", "Swing" }, { "glide", "Glide" }, { "tone", "Tone" }, { "drive", "Drive" }, { "volume", "Volume" }, { "ghosts", "Ghosts" }, { "accent", "Accent" } };
     for (auto& k : ks) { knobs.push_back (std::make_unique<Knob> (fonts, st, k.first, k.second)); addAndMakeVisible (*knobs.back()); }
 
     auto combo = [&] (juce::ComboBox& c, const char* id) {
@@ -299,7 +305,7 @@ UndertowEditor::UndertowEditor (UndertowProcessor& p) : AudioProcessorEditor (&p
         addAndMakeVisible (c);
         combos.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (st, id, c));
     };
-    combo (key, "key"); combo (scale, "scale"); combo (octave, "octave"); combo (bars, "bars"); combo (sound, "sound");
+    combo (key, "key"); combo (scale, "scale"); combo (octave, "octave"); combo (bars, "bars"); combo (sound, "sound"); combo (chords, "chords");
 
     for (auto* b : { &generate, &mutate, &undo, &play, &kick, &lockR, &lockP, &exportB }) addAndMakeVisible (*b);
     for (auto* b : { &kick, &lockR, &lockP }) { b->setClickingTogglesState (true); b->filled = false; }
@@ -326,11 +332,11 @@ void UndertowEditor::timerCallback()
 {
     roll.refresh(); roll.repaint();
     const int s = (int) proc.p ("style");
-    if (s != lastStyle) { for (int i = 0; i < (int) styles.size(); ++i) styles[(size_t) i]->setToggleState (i == s, juce::dontSendNotification); lastStyle = s; repaint (16, 360, 250, 50); }
+    if (s != lastStyle) { for (int i = 0; i < (int) styles.size(); ++i) styles[(size_t) i]->setToggleState (i == s, juce::dontSendNotification); lastStyle = s; repaint (16, 380, 250, 50); }
     play.setToggleState (proc.internalPlay.load() || proc.uiBeat.load() >= 0, juce::dontSendNotification);
     undo.setEnabled (proc.canUndo()); undo.setAlpha (proc.canUndo() ? 1.f : 0.4f);
-    static int tick = 0; if (++tick % 10 == 0) { drag.repaint(); repaint (W - 250, 0, 250, 80); repaint (60, 610, 130, 60); }
-    repaint (900, 500, 250, 80);
+    static int tick = 0; if (++tick % 10 == 0) { drag.repaint(); repaint (W - 250, 0, 250, 80); repaint (60, 690, 130, 60); }
+    repaint (900, 580, 250, 80);
 }
 
 void UndertowEditor::paint (juce::Graphics& g)
@@ -351,7 +357,7 @@ void UndertowEditor::paint (juce::Graphics& g)
     g.setColour (col::lime); g.setFont (fonts.s (11.5f));
     g.drawText ("B A S S L I N E   G E N E R A T O R", 68, 50, 300, 14, juce::Justification::left);
     g.setColour (col::faint); g.setFont (fonts.s (10.5f));
-    for (auto [x, w, t] : { std::tuple<int, int, const char*> { 470, 70, "KEY" }, { 548, 130, "SCALE" }, { 686, 64, "OCT" }, { 758, 92, "BARS" } })
+    for (auto [x, w, t] : { std::tuple<int, int, const char*> { 470, 70, "KEY" }, { 548, 130, "SCALE" }, { 686, 64, "OCT" }, { 758, 92, "BARS" }, { 858, 150, "CHORDS" } })
         g.drawText (t, x + 2, 14, w, 12, juce::Justification::left);
     g.setColour (col::faint); g.drawText ("by", W - 140, 22, 30, 14, juce::Justification::right);
     g.setColour (col::text); g.setFont (fonts.b (15)); g.drawText ("TOKEN WISE", W - 108, 19, 90, 20, juce::Justification::right);
@@ -359,22 +365,22 @@ void UndertowEditor::paint (juce::Graphics& g)
 
     // section labels
     auto lab = [&] (const char* t, int x, int y) { g.setColour (col::grey); g.setFont (fonts.b (11.5f)); g.drawText (t, x, y, 200, 14, juce::Justification::left); };
-    lab ("STYLE", 22, 92); lab ("SHAPE", 22, 412); lab ("FEEL", 912, 92); lab ("SOUND", 912, 228);
+    lab ("STYLE", 22, 92); lab ("SHAPE", 22, 432); lab ("FEEL", 912, 92); lab ("SOUND", 912, 320);
     // style blurb
     g.setColour (col::grey); g.setFont (fonts.m (12.5f));
-    g.drawFittedText (ut::styleBlurb ((int) proc.p ("style")), 22, 362, 236, 36, juce::Justification::topLeft, 2);
+    g.drawFittedText (ut::styleBlurb ((int) proc.p ("style")), 22, 390, 236, 36, juce::Justification::topLeft, 2);
     // side panels
     g.setColour (col::panel.withAlpha (0.6f));
     // bottom bar
-    g.setColour (col::panel); g.fillRoundedRectangle (12, 610, W - 24, 58, 16);
-    g.setColour (col::line); g.drawRoundedRectangle (12.5f, 610.5f, W - 25, 57, 16, 1);
+    g.setColour (col::panel); g.fillRoundedRectangle (12, 690, W - 24, 58, 16);
+    g.setColour (col::line); g.drawRoundedRectangle (12.5f, 690.5f, W - 25, 57, 16, 1);
     g.setColour (col::text); g.setFont (fonts.n (17));
-    g.drawText (juce::String (juce::roundToInt (proc.bpm.load())), 78, 622, 60, 20, juce::Justification::left);
-    g.setColour (col::faint); g.setFont (fonts.s (10)); g.drawText (juce::String::fromUTF8 ("BPM \xc2\xb7 HOST"), 78, 643, 90, 12, juce::Justification::left);
-    g.setColour (col::faint); g.setFont (fonts.s (10.5f)); g.drawText ("LOCK", 268, 632, 40, 14, juce::Justification::left);
+    g.drawText (juce::String (juce::roundToInt (proc.bpm.load())), 78, 702, 60, 20, juce::Justification::left);
+    g.setColour (col::faint); g.setFont (fonts.s (10)); g.drawText (juce::String::fromUTF8 ("BPM \xc2\xb7 HOST"), 78, 723, 90, 12, juce::Justification::left);
+    g.setColour (col::faint); g.setFont (fonts.s (10.5f)); g.drawText ("LOCK", 268, 712, 40, 14, juce::Justification::left);
     // scope
     {
-        const juce::Rectangle<float> sc (912, 508, 228, 64);
+        const juce::Rectangle<float> sc (912, 588, 228, 64);
         g.setColour (col::panel); g.fillRoundedRectangle (sc, 10);
         g.setColour (col::line); g.drawRoundedRectangle (sc.reduced (0.5f), 10, 1);
         g.setColour (col::line); g.drawHorizontalLine ((int) sc.getCentreY(), sc.getX() + 8, sc.getRight() - 8);
@@ -394,24 +400,25 @@ void UndertowEditor::paint (juce::Graphics& g)
         g.setColour (col::faint); g.setFont (fonts.s (10)); g.drawText ("OUT", (int) sc.getX() + 10, (int) sc.getY() + 6, 60, 12, juce::Justification::left);
     }
     g.setColour (col::faint); g.setFont (fonts.m (11));
-    g.drawFittedText ("MIDI goes out too: route it to Serpent or any synth.", 912, 578, 228, 30, juce::Justification::topLeft, 2);
+    g.drawFittedText ("MIDI goes out too: route it to Serpent or any synth.", 912, 658, 228, 26, juce::Justification::topLeft, 2);
 }
 
 void UndertowEditor::resized()
 {
-    for (int i = 0; i < (int) styles.size(); ++i) styles[(size_t) i]->setBounds (22 + (i % 2) * 122, 112 + (i / 2) * 60, 114, 52);
-    knobs[0]->setBounds (22, 430, 112, 86); knobs[1]->setBounds (144, 430, 112, 86);
-    knobs[2]->setBounds (22, 518, 112, 86); knobs[3]->setBounds (144, 518, 112, 86);
-    roll.setBounds (278, 84, 616, 516);
+    for (int i = 0; i < (int) styles.size(); ++i) styles[(size_t) i]->setBounds (22 + (i % 2) * 122, 112 + (i / 2) * 46, 114, 40);
+    knobs[0]->setBounds (22, 450, 112, 86); knobs[1]->setBounds (144, 450, 112, 86);
+    knobs[2]->setBounds (22, 540, 112, 86); knobs[3]->setBounds (144, 540, 112, 86);
+    roll.setBounds (278, 84, 616, 596);
     knobs[4]->setBounds (912, 112, 108, 96); knobs[5]->setBounds (1030, 112, 108, 96);
-    sound.setBounds (912, 248, 228, 34);
-    knobs[6]->setBounds (912, 294, 108, 96); knobs[7]->setBounds (1030, 294, 108, 96);
-    knobs[8]->setBounds (912, 398, 108, 96);
-    key.setBounds (470, 30, 70, 32); scale.setBounds (548, 30, 130, 32); octave.setBounds (686, 30, 64, 32); bars.setBounds (758, 30, 92, 32);
-    play.setBounds (24, 617, 44, 44);
-    kick.setBounds (168, 621, 84, 36);
-    lockR.setBounds (306, 621, 90, 36); lockP.setBounds (402, 621, 76, 36);
-    generate.setBounds (500, 616, 232, 46);
-    mutate.setBounds (744, 621, 108, 36); undo.setBounds (860, 621, 64, 36);
-    drag.setBounds (932, 619, 134, 40); exportB.setBounds (1072, 621, 68, 36);
+    knobs[9]->setBounds (912, 212, 108, 96); knobs[10]->setBounds (1030, 212, 108, 96);
+    sound.setBounds (912, 340, 228, 34);
+    knobs[6]->setBounds (912, 382, 108, 96); knobs[7]->setBounds (1030, 382, 108, 96);
+    knobs[8]->setBounds (912, 482, 108, 96);
+    key.setBounds (470, 30, 70, 32); scale.setBounds (548, 30, 130, 32); octave.setBounds (686, 30, 64, 32); bars.setBounds (758, 30, 92, 32); chords.setBounds (858, 30, 150, 32);
+    play.setBounds (24, 697, 44, 44);
+    kick.setBounds (168, 701, 84, 36);
+    lockR.setBounds (306, 701, 90, 36); lockP.setBounds (402, 701, 76, 36);
+    generate.setBounds (500, 696, 232, 46);
+    mutate.setBounds (744, 701, 108, 36); undo.setBounds (860, 701, 64, 36);
+    drag.setBounds (932, 699, 134, 40); exportB.setBounds (1072, 701, 68, 36);
 }

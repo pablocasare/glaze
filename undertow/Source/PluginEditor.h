@@ -85,7 +85,7 @@ private:
     utui::Roll roll { proc, fonts };
     std::vector<std::unique_ptr<utui::Chip>> styles;
     std::vector<std::unique_ptr<utui::Knob>> knobs;
-    juce::ComboBox key, scale, octave, bars, sound;
+    juce::ComboBox key, scale, octave, bars, sound, chords;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> combos;
     utui::Chip generate { fonts, "GENERATE" }, mutate { fonts, "MUTATE" }, undo { fonts, "UNDO" }, play { fonts, "" }, kick { fonts, "KICK" },
         lockR { fonts, "RHYTHM" }, lockP { fonts, "PITCH" }, exportB { fonts, "EXPORT" };

@@ -100,6 +100,8 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     v.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "scale", 1 }, "Scale", scales, 0));
     v.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "octave", 1 }, "Octave", StringArray { "1", "2", "3" }, 0));
     v.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "bars", 1 }, "Bars", barNames, 1));
+    StringArray chordNames; for (int i = 0; i < NumChords; ++i) chordNames.add (chordName (i));
+    v.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "chords", 1 }, "Chords", chordNames, 0));
     auto pct = [&] (const char* id, const char* nm, float def) {
         v.push_back (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, nm, NormalisableRange<float> (0, 1), def,
             AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return String (roundToInt (x * 100)) + "%"; })));
@@ -108,6 +110,8 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     pct ("movement", "Movement", 0.45f);
     pct ("variation", "Variation", 0.3f);
     pct ("gate", "Length", 0.8f);
+    pct ("ghosts", "Ghost Notes", 0.3f);
+    pct ("accent", "Accent", 0.5f);
     v.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "swing", 1 }, "Swing", NormalisableRange<float> (0.5f, 0.75f), 0.56f,
         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return String (roundToInt (x * 100)) + "%"; })));
     v.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "glide", 1 }, "Glide", NormalisableRange<float> (5, 250, 0, 0.6f), 60,
@@ -125,7 +129,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     return { v.begin(), v.end() };
 }
 
-static const char* genIds[] = { "style", "key", "scale", "octave", "bars", "density", "movement", "variation", "gate", "swing" };
+static const char* genIds[] = { "style", "key", "scale", "octave", "bars", "density", "movement", "variation", "gate", "swing", "chords", "ghosts", "accent" };
 
 UndertowProcessor::UndertowProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -150,6 +154,7 @@ ut::Params UndertowProcessor::currentParams() const
     Params P;
     P.style = (int) p ("style"); P.bars = bars();
     P.density = p ("density"); P.movement = p ("movement"); P.variation = p ("variation"); P.gate = p ("gate");
+    P.chords = (int) p ("chords"); P.ghosts = p ("ghosts"); P.accent = p ("accent");
     P.rhythmSeed = seeds.r; P.pitchSeed = seeds.p; P.mutateSeed = seeds.m; P.mutations = seeds.muts;
     return P;
 }
