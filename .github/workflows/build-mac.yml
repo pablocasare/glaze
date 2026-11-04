@@ -117,10 +117,25 @@ jobs:
           name: Liftoff-mac
           path: dist/Liftoff-mac.zip
 
+      - name: Undertow .pkg installer
+        run: |
+          U=build-undertow/Undertow_artefacts/Release
+          R=pkgroot/Library/Audio/Plug-Ins
+          mkdir -p "$R/VST3" "$R/Components"
+          cp -R "$U/VST3/Undertow.vst3" "$R/VST3/"
+          cp -R "$U/AU/Undertow.component" "$R/Components/"
+          pkgbuild --root pkgroot --install-location / --identifier com.tokenwise.undertow.pkg --version 1.0.0 \
+            --scripts packaging/undertow-scripts dist/Undertow-Installer.pkg
+
       - uses: actions/upload-artifact@v4
         with:
           name: Undertow-mac
           path: dist/Undertow-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Undertow-Installer
+          path: dist/Undertow-Installer.pkg
 
       - name: Publish release (when a v* tag is pushed)
         if: startsWith(github.ref, 'refs/tags/v')
