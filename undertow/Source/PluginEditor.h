@@ -6,8 +6,11 @@ namespace utui
 {
 namespace col
 {
-    const juce::Colour bg { 0xff0a0b0d }, panel { 0xff131418 }, panel2 { 0xff1a1c21 }, line { 0xff25282f }, lane { 0xff16181c },
-        lime { 0xffcef25c }, limeDim { 0xff5f7a26 }, cream { 0xfff0f8d6 }, text { 0xfff4f4f6 }, grey { 0xff8c8f98 }, faint { 0xff4a4d55 };
+    // graphite hardware, one signal colour
+    const juce::Colour bg { 0xff121417 }, chassis { 0xff181b1f }, module { 0xff1d2125 }, moduleHi { 0xff23282d }, edge { 0xff2c3137 }, edgeDark { 0xff0a0b0d },
+        screen { 0xff0b0d0f }, screenLine { 0xff1a1e22 }, screenBeat { 0xff22272c }, screenBar { 0xff323940 },
+        sig { 0xffc8e45a }, sigDim { 0xff6f8132 }, sigDeep { 0xff2b3417 },
+        ink { 0xffe8eaed }, label { 0xff8a919a }, dim { 0xff5a6169 }, faint { 0xff3a4046 }, warn { 0xffe7a04a };
 }
 struct Fonts
 {
@@ -17,6 +20,7 @@ struct Fonts
     juce::Font s (float h) const { return juce::Font (juce::FontOptions (bold).withHeight (h)); }
     juce::Font m (float h) const { return juce::Font (juce::FontOptions (medium).withHeight (h)); }
     juce::Font n (float h) const { return juce::Font (juce::FontOptions (mono).withHeight (h)); }
+    juce::Font caps (float h) const { auto f = s (h); f.setExtraKerningFactor (0.14f); return f; }
 };
 
 struct LnF : juce::LookAndFeel_V4
@@ -25,10 +29,12 @@ struct LnF : juce::LookAndFeel_V4
     explicit LnF (const Fonts& fonts);
     void drawRotarySlider (juce::Graphics&, int, int, int, int, float, float, float, juce::Slider&) override;
     void drawComboBox (juce::Graphics&, int, int, bool, int, int, int, int, juce::ComboBox&) override;
-    juce::Font getComboBoxFont (juce::ComboBox&) override { return f.s (14); }
+    juce::Font getComboBoxFont (juce::ComboBox&) override { return f.n (12.5f); }
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
-    juce::Font getPopupMenuFont() override { return f.s (15); }
+    juce::Font getPopupMenuFont() override { return f.m (14); }
     void drawPopupMenuBackground (juce::Graphics&, int, int) override;
+    void drawPopupMenuItem (juce::Graphics&, const juce::Rectangle<int>&, bool, bool, bool, bool, bool, const juce::String&, const juce::String&,
+                            const juce::Drawable*, const juce::Colour*) override;
 };
 
 struct Knob : juce::Component
@@ -37,25 +43,66 @@ struct Knob : juce::Component
     juce::String label; const Fonts& f;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
     Knob (const Fonts& fonts, juce::AudioProcessorValueTreeState& st, const char* id, juce::String lab);
-    void resized() override { s.setBounds (getLocalBounds().withTrimmedTop (18).withTrimmedBottom (16)); }
+    void resized() override { s.setBounds (getLocalBounds().withTrimmedTop (16).withTrimmedBottom (18)); }
     void paint (juce::Graphics&) override;
 };
 
-struct Chip : juce::Button
+// flat hardware button, optional LED for toggles
+struct Btn : juce::Button
 {
-    const Fonts& f; juce::String sub; bool filled = true;
-    Chip (const Fonts& fonts, const juce::String& t) : juce::Button (t), f (fonts) {}
+    enum Kind { Plain, Toggle, Primary };
+    const Fonts& f; Kind kind; juce::String icon;
+    Btn (const Fonts& fonts, const juce::String& t, Kind k = Plain) : juce::Button (t), f (fonts), kind (k) { if (k == Toggle) setClickingTogglesState (true); }
     void paintButton (juce::Graphics&, bool over, bool down) override;
+};
+
+struct StyleList : juce::Component
+{
+    UndertowProcessor& p; const Fonts& f; int hover = -1;
+    StyleList (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) {}
+    void paint (juce::Graphics&) override;
+    void mouseMove (const juce::MouseEvent& e) override { const int h = rowAt (e.y); if (h != hover) { hover = h; repaint(); } }
+    void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override;
+    int rowAt (int y) const { return juce::jlimit (-1, ut::NumStyles - 1, y / rowH()); }
+    int rowH() const { return getHeight() / ut::NumStyles; }
+};
+
+struct PresetBar : juce::Component
+{
+    UndertowProcessor& p; const Fonts& f;
+    PresetBar (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) {}
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
 };
 
 struct Roll : juce::Component
 {
     UndertowProcessor& p; const Fonts& f;
     std::vector<ut::Note> pat; int version = -1;
-    float flash[256] {};
-    Roll (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) {}
+    float flash[512] {};
+    int hoverNote = -1;
+    // edit state
+    enum Drag { None, Move, Resize, Velocity } drag = None;
+    int dragIdx = -1, grabStepOff = 0; ut::Note orig;
+    int lo = -3, hi = 12;                 // visible scale-degree range
+    Roll (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) { setRepaintsOnMouseActivity (false); }
     void paint (juce::Graphics&) override;
     void refresh();
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    // geometry
+    juce::Rectangle<float> gridArea() const;
+    juce::Rectangle<float> velArea() const;
+    float xOfStep (double step) const;
+    int stepAt (float x) const;
+    int degAt (float y) const;
+    juce::Rectangle<float> noteRect (const ut::Note&) const;
+    int noteAt (juce::Point<float>) const;
+    void computeRange();
 };
 
 struct DragTile : juce::Component
@@ -66,6 +113,35 @@ struct DragTile : juce::Component
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override { dragging = false; }
 };
+
+struct Scope : juce::Component
+{
+    UndertowProcessor& p; const Fonts& f;
+    Scope (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) {}
+    void paint (juce::Graphics&) override;
+};
+
+// everything lives here at 1x; the editor scales it
+struct Content : juce::Component
+{
+    static constexpr int W = 1180, H = 780;
+    UndertowProcessor& proc; const Fonts& fonts;
+    juce::Image grain;
+    StyleList styles; PresetBar preset; Roll roll; DragTile drag; Scope scope;
+    std::vector<std::unique_ptr<Knob>> knobs;
+    juce::ComboBox key, scale, octave, bars, chords, sound;
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> combos;
+    Btn generate { fonts, "GENERATE", Btn::Primary }, mutate { fonts, "MUTATE" }, undo { fonts, "UNDO" }, redo { fonts, "REDO" },
+        play { fonts, "", Btn::Plain }, kick { fonts, "KICK", Btn::Toggle }, lockR { fonts, "RHYTHM", Btn::Toggle }, lockP { fonts, "PITCH", Btn::Toggle },
+        exportB { fonts, "EXPORT" }, clear { fonts, "CLEAR" };
+    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> btns;
+    std::unique_ptr<juce::FileChooser> chooser;
+    Content (UndertowProcessor&, const Fonts&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void module (juce::Graphics&, juce::Rectangle<float>, const char* title) const;
+    void tick();
+};
 }
 
 class UndertowEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -73,24 +149,14 @@ class UndertowEditor : public juce::AudioProcessorEditor, private juce::Timer
 public:
     explicit UndertowEditor (UndertowProcessor&);
     ~UndertowEditor() override;
-    void paint (juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
-    utui::Roll& getRoll() { return roll; }
+    utui::Roll& getRoll() { return content.roll; }
+    utui::Content& getContent() { return content; }
 
 private:
     UndertowProcessor& proc;
     utui::Fonts fonts;
     utui::LnF lnf { fonts };
-    utui::Roll roll { proc, fonts };
-    std::vector<std::unique_ptr<utui::Chip>> styles;
-    std::vector<std::unique_ptr<utui::Knob>> knobs;
-    juce::ComboBox key, scale, octave, bars, sound, chords;
-    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> combos;
-    utui::Chip generate { fonts, "GENERATE" }, mutate { fonts, "MUTATE" }, undo { fonts, "UNDO" }, play { fonts, "" }, kick { fonts, "KICK" },
-        lockR { fonts, "RHYTHM" }, lockP { fonts, "PITCH" }, exportB { fonts, "EXPORT" };
-    std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> btns;
-    utui::DragTile drag { proc, fonts };
-    std::unique_ptr<juce::FileChooser> chooser;
-    int lastStyle = -1;
+    utui::Content content { proc, fonts };
 };

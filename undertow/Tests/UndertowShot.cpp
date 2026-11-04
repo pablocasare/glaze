@@ -75,6 +75,25 @@ int main (int argc, char** argv)
         std::printf ("%s undo restores\n%s mutate changes notes\n%s state recall\n", same ? "PASS" : "FAIL", diff ? "PASS" : "FAIL", st ? "PASS" : "FAIL");
         failures += ! same + ! diff + ! st;
     }
+    // hand edits: apply, undo/redo, survive save/load, survive a key change
+    {
+        UndertowProcessor a; a.regenerate(); auto base = a.getPattern();
+        auto ed = base; ut::Note n; n.step = 1; n.len = 1; n.deg = 4; n.vel = 90; ed.push_back (n);
+        a.beginEdit(); a.applyEdit (ed);
+        bool ok1 = a.isEdited() && a.getPattern().size() == base.size() + 1;
+        a.undo(); bool ok2 = a.getPattern().size() == base.size() && ! a.isEdited();
+        a.redo(); bool ok3 = a.getPattern().size() == base.size() + 1 && a.isEdited();
+        juce::MemoryBlock mb; a.getStateInformation (mb);
+        UndertowProcessor b; b.setStateInformation (mb.getData(), (int) mb.getSize());
+        bool ok4 = b.isEdited() && b.getPattern().size() == base.size() + 1;
+        setP (b, "key", 3.f); b.pump();
+        bool ok5 = b.isEdited() && b.getPattern().size() == base.size() + 1;
+        b.applyPreset (4); b.pump();
+        bool ok6 = ! b.isEdited() && (int) b.p ("style") == ut::TwoStep;
+        std::printf ("%s edit applies\n%s undo edit\n%s redo edit\n%s edited pattern saved with project\n%s key change keeps edits\n%s preset loads\n",
+                     ok1 ? "PASS" : "FAIL", ok2 ? "PASS" : "FAIL", ok3 ? "PASS" : "FAIL", ok4 ? "PASS" : "FAIL", ok5 ? "PASS" : "FAIL", ok6 ? "PASS" : "FAIL");
+        failures += ! ok1 + ! ok2 + ! ok3 + ! ok4 + ! ok5 + ! ok6;
+    }
     std::printf (failures ? "%d FAILURES\n" : "ALL OK\n", failures);
     return failures;
 }

@@ -145,6 +145,25 @@ inline float slideAmount (int style)
     switch (style) { case Acid: return 0.55f; case TwoStep: return 0.35f; case SpeedGarage: return 0.4f; case DeepTech: return 0.45f; case Bassline: return 0.2f; default: return 0.0f; }
 }
 
+// the bass root (scale degree) of each bar: the chord progression the line follows
+inline void barRoots (const Params& P, int* shift)
+{
+    for (int b = 0; b < 4; ++b) shift[b] = 0;
+    if (P.bars == 1) return;
+    if (P.chords == ChordAuto)
+    {
+        std::mt19937 hr (P.pitchSeed * 2246822519u + 13u);
+        if (std::uniform_real_distribution<float> (0.f, 1.f) (hr) < (P.movement - 0.45f) * 1.6f)
+        {
+            static const int prog[] = { ChordI_VI, ChordI_VII, ChordI_iv, ChordI_VI_VII };
+            const int c = prog[hr() % 4];
+            for (int b = 0; b < 4; ++b) shift[b] = chordRoots (c)[b];
+        }
+    }
+    else for (int b = 0; b < 4; ++b) shift[b] = chordRoots (P.chords)[b];
+    if (P.bars == 2 && P.chords == ChordI_VI_VII) shift[1] = -2;
+}
+
 inline std::vector<Note> generate (const Params& P)
 {
     std::mt19937 rr (P.rhythmSeed * 2654435761u + (uint32_t) P.style * 97u), pr (P.pitchSeed * 40503u + 7u), gr (P.rhythmSeed * 69069u + 1u);
@@ -208,20 +227,7 @@ inline std::vector<Note> generate (const Params& P)
         raw.erase (std::unique (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step == b.step; }), raw.end());
     }
 
-    // ---------------- harmony: the bass root per bar
-    int shift[4] = { 0, 0, 0, 0 };
-    if (P.chords == ChordAuto)
-    {
-        if (P.bars >= 2 && u (pr) < (m - 0.45f) * 1.6f)
-        {
-            static const int prog[] = { ChordI_VI, ChordI_VII, ChordI_iv, ChordI_VI_VII };
-            const int c = prog[pr() % 4];
-            for (int b = 0; b < 4; ++b) shift[b] = chordRoots (c)[b];
-        }
-    }
-    else for (int b = 0; b < 4; ++b) shift[b] = chordRoots (P.chords)[b];
-    if (P.bars == 2 && P.chords == ChordI_VI_VII) shift[1] = -2;     // two bars can only hold the first move
-    if (P.bars == 1) for (auto& s : shift) s = 0;
+    int shift[4]; barRoots (P, shift);
     const int nb = std::max (1, P.bars);
     auto barShift = [&] (int step) { return shift[std::min (3, (step / 16) % nb)]; };
 
@@ -299,12 +305,17 @@ inline std::vector<Note> generate (const Params& P)
     {
         std::mt19937 mr (P.mutateSeed);
         static const char roles[] = { 'R', 'O', '5', '7', '3' };
-        for (int k = 0; k < P.mutations * 2; ++k)
+        int done = 0;
+        for (int tries = 0; done < P.mutations * 2 && tries < 200; ++tries)
         {
             auto& n = out[mr() % out.size()];
             if (n.ghost) continue;
-            if (mr() % 3 == 0) n.vel = std::clamp (n.vel + (int) (mr() % 31) - 15, 55, 127);
-            else n.deg = roleDeg (roles[mr() % 5]) + barShift (n.step);
+            if (mr() % 3 == 0) { n.vel = std::clamp (n.vel + 10 + (int) (mr() % 21) * ((mr() & 1) ? 1 : -1), 55, 127); ++done; }
+            else
+            {
+                const int nd = roleDeg (roles[mr() % 5]) + barShift (n.step);
+                if (nd != n.deg) { n.deg = nd; ++done; }
+            }
         }
     }
     return out;

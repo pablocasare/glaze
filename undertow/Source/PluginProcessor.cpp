@@ -142,6 +142,75 @@ UndertowProcessor::UndertowProcessor()
 
 UndertowProcessor::~UndertowProcessor() { for (auto* id : genIds) apvts.removeParameterListener (id, this); }
 
+// key, scale, octave, swing and length only change how the notes play, so they never throw away hand edits
+void UndertowProcessor::parameterChanged (const juce::String& id, float)
+{
+    if (! applyingPreset) presetModified = true;
+    if (id == "key" || id == "scale" || id == "octave" || id == "swing" || id == "gate") renderDirty = true;
+    else dirty = true;
+}
+
+const std::vector<UndertowProcessor::Preset>& UndertowProcessor::presets()
+{
+    using namespace ut;
+    static const std::vector<Preset> P {
+        { "Night Roller",       Rolling,     Minor,     ChordAuto,         .65f, .40f, .30f, .80f, .56f,  60, .30f, .50f, 1,  .00f, .20f },
+        { "Warehouse Driver",   Driving,     Minor,     ChordStay,         .70f, .30f, .20f, .60f, .52f,  40, .20f, .60f, 5,  .10f, .40f },
+        { "Offbeat Classic",    Offbeat,     Dorian,    ChordI_VII,        .50f, .35f, .25f, .85f, .54f,  60, .15f, .45f, 3,  .00f, .15f },
+        { "Bouncy Tech",        Bouncy,      Minor,     ChordI_VI,         .55f, .50f, .35f, .50f, .56f,  50, .35f, .60f, 1,  .15f, .25f },
+        { "Garage Swing",       TwoStep,     Minor,     ChordI_VI_VII,     .60f, .50f, .35f, .85f, .66f,  90, .30f, .55f, 2,  .00f, .35f },
+        { "Minimal Hypnosis",   Minimal,     Phrygian,  ChordStay,         .40f, .20f, .20f, .60f, .58f,  40, .25f, .40f, 0, -.10f, .10f },
+        { "Off The Grid",       Broken,      Minor,     ChordI_iv,         .60f, .55f, .45f, .60f, .57f,  60, .35f, .55f, 1,  .10f, .30f },
+        { "Squelch 303",        Acid,        Phrygian,  ChordStay,         .70f, .60f, .40f, .70f, .54f,  70, .20f, .70f, 4,  .20f, .45f },
+        { "Speed Wobble",       SpeedGarage, Minor,     ChordI_VII,        .65f, .50f, .35f, .80f, .60f,  80, .25f, .55f, 2,  .10f, .50f },
+        { "Tresillo Sun",       Afro,        Dorian,    ChordI_iv,         .55f, .45f, .30f, .75f, .55f,  50, .35f, .50f, 0,  .05f, .15f },
+        { "Deep Undertow",      DeepTech,    Minor,     ChordI_VI,         .45f, .35f, .25f, .95f, .56f, 120, .20f, .40f, 0, -.15f, .20f },
+        { "Bassline Bounce",    Bassline,    Minor,     ChordI_iv_VI_V,    .65f, .55f, .30f, .55f, .52f,  50, .25f, .65f, 5,  .20f, .45f },
+        { "Late Night Reese",   Rolling,     HarmMinor, ChordI_VI_VII,     .55f, .55f, .35f, .90f, .56f, 100, .25f, .50f, 2,  .00f, .30f },
+        { "Sub Pressure",       Offbeat,     Minor,     ChordStay,         .45f, .20f, .20f, .90f, .53f,  40, .10f, .40f, 0, -.20f, .10f },
+        { "Jackin Organ",       Bouncy,      Dorian,    ChordI_VII,        .60f, .45f, .35f, .55f, .58f,  50, .30f, .60f, 3,  .10f, .20f },
+        { "Tunnel Vision",      Driving,     Phrygian,  ChordI_VI,         .75f, .40f, .30f, .50f, .53f,  40, .35f, .70f, 4, -.10f, .50f } };
+    return P;
+}
+
+void UndertowProcessor::applyPreset (int index)
+{
+    const auto& L = presets(); if (L.empty()) return;
+    index = (index % (int) L.size() + (int) L.size()) % (int) L.size();
+    const auto& P = L[(size_t) index];
+    pushHistory();
+    applyingPreset = true;
+    auto set = [&] (const char* id, float v) { if (auto* q = apvts.getParameter (id)) { q->beginChangeGesture(); q->setValueNotifyingHost (q->convertTo0to1 (v)); q->endChangeGesture(); } };
+    set ("style", (float) P.style); set ("scale", (float) P.scale); set ("chords", (float) P.chords);
+    set ("density", P.density); set ("movement", P.movement); set ("variation", P.variation); set ("gate", P.gate);
+    set ("swing", P.swing); set ("glide", P.glide); set ("ghosts", P.ghosts); set ("accent", P.accent);
+    set ("sound", (float) P.sound); set ("tone", P.tone); set ("drive", P.drive);
+    applyingPreset = false;
+    currentPreset = index; presetModified = false;
+    edited = false; dirty = true;
+}
+
+UndertowProcessor::Snapshot UndertowProcessor::snap() const { Snapshot s; s.seeds = seeds; s.pat = getPattern(); s.edited = edited; return s; }
+void UndertowProcessor::restore (const Snapshot& s)
+{
+    seeds = s.seeds; edited = s.edited;
+    { const juce::SpinLock::ScopedLockType l (patLock); pattern = s.pat; rebuildEvents(); }
+    patternVersion++;
+}
+void UndertowProcessor::pushHistory()
+{
+    history.push_back (snap()); if (history.size() > 100) history.erase (history.begin());
+    future.clear();
+}
+void UndertowProcessor::beginEdit() { pushHistory(); }
+void UndertowProcessor::applyEdit (std::vector<ut::Note> notes)
+{
+    std::sort (notes.begin(), notes.end(), [] (const ut::Note& a, const ut::Note& b) { return a.step < b.step; });
+    edited = true;
+    { const juce::SpinLock::ScopedLockType l (patLock); pattern = std::move (notes); rebuildEvents(); }
+    patternVersion++;
+}
+
 bool UndertowProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 {
     return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo() || l.getMainOutputChannelSet() == juce::AudioChannelSet::mono();
@@ -163,6 +232,7 @@ int UndertowProcessor::rootMidi() const { return 12 * ((int) p ("octave") + 2) +
 
 void UndertowProcessor::regenerate()
 {
+    if (edited) { pushHistory(); edited = false; }
     auto pat = generate (currentParams());
     {
         const juce::SpinLock::ScopedLockType l (patLock);
@@ -192,11 +262,15 @@ void UndertowProcessor::rebuildEvents()
     std::sort (events.begin(), events.end(), [] (const Ev& a, const Ev& b) { return a.beat < b.beat || (a.beat == b.beat && ! a.on && b.on); });
 }
 
-void UndertowProcessor::timerCallback() { if (dirty.exchange (false)) regenerate(); }
+void UndertowProcessor::timerCallback()
+{
+    if (dirty.exchange (false)) { renderDirty = false; regenerate(); }
+    else if (renderDirty.exchange (false)) { { const juce::SpinLock::ScopedLockType l (patLock); rebuildEvents(); } patternVersion++; }
+}
 
 void UndertowProcessor::generateNew()
 {
-    history.push_back (seeds); if (history.size() > 64) history.erase (history.begin());
+    pushHistory(); edited = false;
     if (p ("lockRhythm") < 0.5f) seeds.r = (uint32_t) rnd.nextInt();
     if (p ("lockPitch") < 0.5f) seeds.p = (uint32_t) rnd.nextInt();
     seeds.muts = 0; seeds.m = (uint32_t) rnd.nextInt() | 1u;
@@ -204,7 +278,7 @@ void UndertowProcessor::generateNew()
 }
 void UndertowProcessor::mutate()
 {
-    history.push_back (seeds); if (history.size() > 64) history.erase (history.begin());
+    pushHistory(); edited = false;
     if (seeds.m == 0) seeds.m = (uint32_t) rnd.nextInt() | 1u;
     seeds.muts++;
     regenerate();
@@ -212,7 +286,12 @@ void UndertowProcessor::mutate()
 void UndertowProcessor::undo()
 {
     if (history.empty()) return;
-    seeds = history.back(); history.pop_back(); regenerate();
+    future.push_back (snap()); restore (history.back()); history.pop_back();
+}
+void UndertowProcessor::redo()
+{
+    if (future.empty()) return;
+    history.push_back (snap()); restore (future.back()); future.pop_back();
 }
 
 void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiBuffer& midi)
@@ -338,6 +417,20 @@ void UndertowProcessor::getStateInformation (juce::MemoryBlock& mb)
     auto st = apvts.copyState();
     st.setProperty ("seedR", (juce::int64) seeds.r, nullptr); st.setProperty ("seedP", (juce::int64) seeds.p, nullptr);
     st.setProperty ("seedM", (juce::int64) seeds.m, nullptr); st.setProperty ("muts", seeds.muts, nullptr);
+    st.setProperty ("edited", edited, nullptr); st.setProperty ("preset", currentPreset, nullptr);
+    st.removeChild (st.getChildWithName ("PATTERN"), nullptr);
+    if (edited)
+    {
+        juce::ValueTree pt ("PATTERN");
+        for (auto& n : getPattern())
+        {
+            juce::ValueTree nt ("N");
+            nt.setProperty ("s", n.step, nullptr); nt.setProperty ("l", n.len, nullptr); nt.setProperty ("d", n.deg, nullptr);
+            nt.setProperty ("v", n.vel, nullptr); nt.setProperty ("sl", n.slide, nullptr); nt.setProperty ("g", n.ghost, nullptr);
+            pt.appendChild (nt, nullptr);
+        }
+        st.appendChild (pt, nullptr);
+    }
     if (auto xml = st.createXml()) copyXmlToBinary (*xml, mb);
 }
 void UndertowProcessor::setStateInformation (const void* d, int s)
@@ -348,8 +441,22 @@ void UndertowProcessor::setStateInformation (const void* d, int s)
         if (! st.isValid()) return;
         seeds.r = (uint32_t) (juce::int64) st.getProperty ("seedR", 11); seeds.p = (uint32_t) (juce::int64) st.getProperty ("seedP", 7);
         seeds.m = (uint32_t) (juce::int64) st.getProperty ("seedM", 0); seeds.muts = st.getProperty ("muts", 0);
-        apvts.replaceState (st);
+        currentPreset = st.getProperty ("preset", 0);
+        auto pt = st.getChildWithName ("PATTERN");
+        std::vector<ut::Note> notes;
+        for (auto nt : pt)
+        {
+            ut::Note n; n.step = nt.getProperty ("s"); n.len = nt.getProperty ("l"); n.deg = nt.getProperty ("d");
+            n.vel = nt.getProperty ("v"); n.slide = nt.getProperty ("sl"); n.ghost = nt.getProperty ("g"); notes.push_back (n);
+        }
+        const bool wasEdited = st.getProperty ("edited", false) && ! notes.empty();
+        st.removeChild (pt, nullptr);
+        applyingPreset = true; apvts.replaceState (st); applyingPreset = false;
+        edited = false;
         regenerate();
+        if (wasEdited) applyEdit (notes);
+        dirty = false; renderDirty = false; presetModified = false;
+        history.clear(); future.clear();
     }
 }
 

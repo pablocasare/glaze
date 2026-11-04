@@ -15,20 +15,33 @@ int main (int, char** argv)
     const double sr = 48000, fps = 30; const int block = 64;
     UndertowProcessor p; Head h; p.setPlayHead (&h); p.prepareToPlay (sr, block);
     std::unique_ptr<UndertowEditor> ed (dynamic_cast<UndertowEditor*> (p.createEditor()));
-    struct Seg { int style, key, scale, sound; float swing; int gen; int chords; };
-    const Seg segs[] = { { 0, 9, 0, 1, 0.56f, 0, 2 }, { 8, 9, 0, 2, 0.60f, 1, 3 }, { 9, 9, 1, 0, 0.55f, 1, 4 }, { 10, 9, 0, 0, 0.56f, 1, 2 }, { 11, 9, 0, 1, 0.52f, 1, 3 }, { 7, 9, 2, 4, 0.54f, 1, 1 } };
-    const int nSeg = 6; const double segBeats = 8; // 2 bars each
+    // presets shown through the real preset system, then a bassline drawn by hand
+    const int presetsShown[] = { 0, 4, 8, 9, 10, 7, -1 };
+    const int nSeg = 7; const double segBeats = 8; // 2 bars each
     const int len = (int) (nSeg * segBeats * 60.0 / h.bpm * sr);
     juce::AudioBuffer<float> all (2, len), buf (2, block); juce::MidiBuffer m;
     int frame = 0, seg = -1;
+    // the hand-drawn line: step, degree, length
+    const int drawn[][3] = { { 2, 0, 1 }, { 3, 0, 1 }, { 6, 7, 1 }, { 7, 0, 1 }, { 10, 0, 1 }, { 11, 0, 1 }, { 13, 4, 1 }, { 14, 6, 2 },
+                             { 18, 5, 1 }, { 19, 5, 1 }, { 22, 12, 1 }, { 23, 5, 1 }, { 26, 5, 1 }, { 27, 5, 1 }, { 29, 4, 1 }, { 30, 1, 2 } };
+    std::vector<ut::Note> hand; int nextDraw = 0;
     for (int pos = 0; pos < len; pos += block)
     {
         const int s = (int) (h.ppq / segBeats);
         if (s != seg && s < nSeg)
         {
-            seg = s; auto& g = segs[s];
-            setP (p, "style", (float) g.style); setP (p, "key", (float) g.key); setP (p, "scale", (float) g.scale); setP (p, "sound", (float) g.sound); setP (p, "swing", g.swing); setP (p, "chords", (float) g.chords); setP (p, "ghosts", 0.35f); if (std::getenv ("NOKICK")) setP (p, "kick", 0);
-            if (g.gen) p.generateNew(); else p.regenerate();
+            seg = s;
+            if (presetsShown[s] >= 0) { p.applyPreset (presetsShown[s]); setP (p, "key", 9); setP (p, "bars", 1); if (s > 0) p.generateNew(); p.pump(); }
+            else { p.beginEdit(); hand.clear(); p.applyEdit (hand); nextDraw = 0; }
+        }
+        if (presetsShown[std::min (seg, nSeg - 1)] < 0)
+        {
+            const double segPos = h.ppq - seg * segBeats; // beats into the segment
+            while (nextDraw < 16 && segPos >= nextDraw * 0.42)
+            {
+                ut::Note n; n.step = drawn[nextDraw][0]; n.deg = drawn[nextDraw][1]; n.len = drawn[nextDraw][2]; n.vel = 108;
+                hand.push_back (n); p.applyEdit (hand); ++nextDraw;
+            }
         }
         const int n = juce::jmin (block, len - pos);
         buf.setSize (2, n, false, false, true); p.processBlock (buf, m);

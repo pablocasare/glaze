@@ -66,8 +66,22 @@ public:
     void generateNew();   // new seeds (respects locks)
     void mutate();
     void undo();
+    void redo();
     bool canUndo() const { return ! history.empty(); }
+    bool canRedo() const { return ! future.empty(); }
     void regenerate();
+    void pump() { timerCallback(); } // run pending regeneration now (tests, offline tools)
+    // hand edits from the piano roll: begin pushes one undo step, apply updates the pattern live
+    void beginEdit();
+    void applyEdit (std::vector<ut::Note> notes);
+    bool isEdited() const { return edited; }
+    void getBarRoots (int* out) const { ut::barRoots (currentParams(), out); }
+    // factory presets
+    struct Preset { const char* name; int style, scale, chords; float density, movement, variation, gate, swing, glide, ghosts, accent; int sound; float tone, drive; };
+    static const std::vector<Preset>& presets();
+    void applyPreset (int index);
+    int currentPreset = 0;
+    bool presetModified = false;
     std::vector<ut::Note> getPattern() const { const juce::SpinLock::ScopedLockType l (patLock); return pattern; }
     ut::Params currentParams() const;
     int rootMidi() const;
@@ -88,12 +102,17 @@ public:
 
 private:
     void timerCallback() override;
-    void parameterChanged (const juce::String&, float) override { dirty = true; }
-    std::atomic<bool> dirty { true };
+    void parameterChanged (const juce::String& id, float) override;
+    std::atomic<bool> dirty { true }, renderDirty { false };
 
     struct Seeds { uint32_t r = 11, p = 7, m = 0; int muts = 0; };
     Seeds seeds;
-    std::vector<Seeds> history;
+    struct Snapshot { Seeds seeds; std::vector<ut::Note> pat; bool edited = false; };
+    std::vector<Snapshot> history, future;
+    bool edited = false, applyingPreset = false;
+    Snapshot snap() const;
+    void restore (const Snapshot&);
+    void pushHistory();
     juce::Random rnd;
 
     mutable juce::SpinLock patLock;
