@@ -52,117 +52,152 @@ struct Params
     int mutations = 0;
 };
 
-// onset probability per 16th in one bar (kick on 0, 4, 8, 12)
-inline void rhythmTemplate (int style, float* p)
+// ---------------------------------------------------------------- building blocks
+// A cell is a few notes; role picks the pitch: R root, O octave, 5 fifth, 7 b7 below, 3 third, 4 fourth, 6 b6 below, 2 second
+struct Cn { int s, len; char r; };
+using Cell = std::vector<Cn>;
+inline int roleDeg (char r)
 {
-    static const float T[][16] = {
-        { .02f, .55f, .95f, .6f, .02f, .55f, .95f, .6f, .02f, .55f, .95f, .6f, .02f, .55f, .95f, .6f },  // rolling
-        { 0, .1f, .95f, .35f, 0, .45f, .7f, .2f, 0, .1f, .95f, .45f, 0, .5f, .6f, .3f },                // bouncy
-        { 0, 0, 1, .1f, 0, 0, 1, .15f, 0, 0, 1, .1f, 0, 0, 1, .3f },                                     // offbeat
-        { .9f, 0, 0, .45f, 0, 0, .6f, 0, 0, .1f, .9f, 0, 0, .55f, 0, .3f },                              // 2-step
-        { 0, 0, .75f, 0, 0, 0, .1f, .35f, 0, 0, .55f, 0, 0, .3f, 0, .15f },                              // minimal
-        { .05f, .85f, .95f, .85f, .05f, .85f, .95f, .85f, .05f, .85f, .95f, .85f, .05f, .85f, .95f, .85f }, // driving
-        { .1f, .4f, .3f, .6f, .1f, .25f, .55f, .4f, .15f, .45f, .3f, .5f, .1f, .55f, .35f, .45f },       // broken
-        { .7f, .6f, .8f, .6f, .7f, .6f, .8f, .6f, .7f, .6f, .8f, .6f, .7f, .6f, .8f, .6f } };           // acid
-    for (int i = 0; i < 16; ++i) p[i] = T[style][i];
+    switch (r) { case 'O': return 7; case '5': return 4; case '7': return -1; case '3': return 2; case '4': return 3; case '6': return -2; case '2': return 1; default: return 0; }
 }
-inline int maxLen (int style) { static const int m[] = { 2, 1, 2, 4, 2, 1, 3, 2 }; return m[style]; }
+// one-beat cells (offsets 0..3 inside the beat, 0 = on the kick)
+inline const std::vector<Cell>& beatCells (int style)
+{
+    static const std::vector<Cell> rolling { { { 2, 2, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 3, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } },
+                                             { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
+    static const std::vector<Cell> offbeat { { { 2, 2, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } } };
+    static const std::vector<Cell> bouncy { { { 2, 1, 'O' } }, { { 2, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 1, 1, 'O' }, { 2, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
+    static const std::vector<Cell> driving { { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
+    static const std::vector<Cell> acid { { { 0, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 0, 2, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 2, 'O' } },
+                                          { { 0, 1, 'R' }, { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 0, 1, 'R' }, { 1, 1, 'O' }, { 2, 1, 'R' }, { 3, 1, '5' } } };
+    switch (style) { case Offbeat: return offbeat; case Bouncy: return bouncy; case Driving: return driving; case Acid: return acid; default: return rolling; }
+}
+// last-beat fills: where the line moves
+inline const std::vector<Cell>& fillCells (int style)
+{
+    static const std::vector<Cell> f { { { 2, 1, 'R' }, { 3, 1, '7' } }, { { 1, 1, 'R' }, { 2, 1, '5' }, { 3, 1, 'O' } }, { { 2, 1, '7' }, { 3, 1, 'R' } },
+                                       { { 2, 1, '3' }, { 3, 1, '4' } }, { { 1, 1, 'O' }, { 2, 1, '7' }, { 3, 1, '5' } }, { { 2, 1, '5' }, { 3, 1, '7' } } };
+    static const std::vector<Cell> off { { { 2, 1, 'R' }, { 3, 1, '5' } }, { { 2, 2, '7' } }, { { 2, 2, '5' } }, { { 2, 1, 'O' }, { 3, 1, '7' } } };
+    static const std::vector<Cell> acid { { { 0, 1, 'O' }, { 1, 1, '7' }, { 2, 1, '5' }, { 3, 1, '3' } }, { { 0, 1, 'R' }, { 1, 1, '3' }, { 2, 1, '4' }, { 3, 1, '5' } }, { { 0, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, '7' } } };
+    if (style == Offbeat || style == Minimal) return off;
+    if (style == Acid) return acid;
+    return f;
+}
+// whole-bar templates for the styles that don't think in beats
+inline const std::vector<Cell>& barTemplates (int style)
+{
+    static const std::vector<Cell> twoStep {
+        { { 0, 3, 'R' }, { 3, 2, 'R' }, { 6, 2, 'R' }, { 10, 2, 'O' }, { 13, 1, 'R' }, { 14, 2, '7' } },
+        { { 0, 2, 'R' }, { 3, 1, 'R' }, { 6, 3, '5' }, { 10, 2, 'R' }, { 13, 3, '3' } },
+        { { 2, 2, 'R' }, { 6, 1, 'R' }, { 7, 2, 'O' }, { 10, 2, 'R' }, { 14, 2, '7' } },
+        { { 0, 4, 'R' }, { 6, 2, 'R' }, { 10, 1, 'R' }, { 11, 2, 'O' }, { 14, 2, '5' } } };
+    static const std::vector<Cell> minimal {
+        { { 2, 1, 'R' }, { 10, 1, 'R' } }, { { 2, 1, 'R' }, { 7, 1, 'R' }, { 10, 1, 'R' } }, { { 3, 1, 'R' }, { 10, 2, 'R' }, { 13, 1, 'R' } },
+        { { 2, 1, 'R' }, { 6, 1, 'O' }, { 10, 1, 'R' }, { 15, 1, 'R' } } };
+    static const std::vector<Cell> broken {
+        { { 1, 1, 'R' }, { 3, 1, 'R' }, { 6, 1, 'O' }, { 9, 2, 'R' }, { 12, 1, '5' }, { 14, 1, 'R' } },
+        { { 0, 1, 'R' }, { 3, 2, 'R' }, { 7, 1, 'R' }, { 8, 1, 'O' }, { 11, 2, 'R' }, { 14, 1, '7' } },
+        { { 2, 1, 'R' }, { 5, 1, 'R' }, { 6, 1, 'O' }, { 9, 1, 'R' }, { 11, 1, 'R' }, { 13, 2, '5' } } };
+    return style == TwoStep ? twoStep : (style == Minimal ? minimal : broken);
+}
+inline bool usesBeatCells (int style) { return style != TwoStep && style != Minimal && style != Broken; }
 
 inline std::vector<Note> generate (const Params& P)
 {
     std::mt19937 rr (P.rhythmSeed * 2654435761u + (uint32_t) P.style * 97u), pr (P.pitchSeed * 40503u + 7u);
     auto u = [] (std::mt19937& g) { return std::uniform_real_distribution<float> (0.f, 1.f) (g); };
-    float tp[16]; rhythmTemplate (P.style, tp);
-    const int total = P.bars * 16;
+    auto pickIdx = [&] (int n, float centre) { // around centre (0..1), a little random
+        const float x = std::clamp (centre * (n - 1) + (u (rr) - 0.5f) * 1.6f, 0.f, (float) (n - 1)); return (int) std::lround (x); };
+    const float m = P.movement, v = P.variation, d = P.density;
 
-    // --- rhythm: build bar 1 (and bar 3), later bars repeat with variation
-    std::vector<int> onsets;
-    const float dens = (0.15f + P.density * 1.25f) * (P.style == Rolling ? 1.5f : 1.f);
-    auto barOnsets = [&] () {
-        std::vector<int> o;
-        for (int s = 0; s < 16; ++s) if (u (rr) < std::min (1.f, std::pow (tp[s], 1.f / dens) * (0.35f + 0.75f * P.density))) o.push_back (s);
-        if (o.size() < 2) { o = { 2, 10 }; }
-        return o;
-    };
-    std::vector<int> A = barOnsets(), B = A;
-    // B: the answer bar, differs in the last beat (fills live here)
-    for (int s = 12; s < 16; ++s)
+    struct Raw { int step, len; char r; bool fill; };
+    std::vector<Raw> raw;
+    if (usesBeatCells (P.style))
     {
-        if (u (rr) < 0.35f + P.variation * 0.5f)
+        const auto& cells = beatCells (P.style); const auto& fills = fillCells (P.style);
+        // sort by how busy they are so density means something
+        std::vector<int> order (cells.size()); for (size_t i = 0; i < order.size(); ++i) order[i] = (int) i;
+        std::stable_sort (order.begin(), order.end(), [&] (int a, int b) { return cells[(size_t) a].size() < cells[(size_t) b].size(); });
+        const int A = order[(size_t) pickIdx ((int) cells.size(), d)];
+        int B = order[(size_t) pickIdx ((int) cells.size(), std::min (1.f, d + 0.2f))]; if (B == A) B = order[(size_t) ((std::find (order.begin(), order.end(), A) - order.begin() + 1) % (int) order.size())];
+        const int F1 = (int) (rr() % fills.size()), F2 = (int) (rr() % fills.size());
+        for (int bar = 0; bar < P.bars; ++bar)
+            for (int beat = 0; beat < 4; ++beat)
+            {
+                const bool answer = (bar % 2 == 1) || P.bars == 1;
+                const Cell* c = &cells[(size_t) A]; bool fill = false;
+                if (beat == 3 && answer) { c = &fills[(size_t) (bar == 3 ? F2 : F1)]; fill = true; }
+                else if (beat == 3 && u (rr) < 0.25f + v * 0.5f) c = &cells[(size_t) B];
+                else if (beat == 1 && u (rr) < v * 0.45f) c = &cells[(size_t) B];
+                for (auto& n : *c) raw.push_back ({ bar * 16 + beat * 4 + n.s, n.len, n.r, fill });
+            }
+    }
+    else
+    {
+        const auto& T = barTemplates (P.style);
+        std::vector<int> order (T.size()); for (size_t i = 0; i < order.size(); ++i) order[i] = (int) i;
+        std::stable_sort (order.begin(), order.end(), [&] (int a, int b) { return T[(size_t) a].size() < T[(size_t) b].size(); });
+        const int A = order[(size_t) pickIdx ((int) T.size(), d)];
+        const auto& fills = fillCells (P.style); const int F = (int) (rr() % fills.size());
+        for (int bar = 0; bar < P.bars; ++bar)
         {
-            auto it = std::find (B.begin(), B.end(), s);
-            if (it != B.end()) B.erase (it);
-            else if (tp[s] > 0.05f || P.style == Broken) B.push_back (s);
+            const bool answer = (bar % 2 == 1) || P.bars == 1;
+            for (auto& n : T[(size_t) A])
+            {
+                if (answer && n.s >= 12 && u (rr) < 0.5f + v * 0.5f) continue; // replaced by the fill
+                if (n.s != T[(size_t) A][0].s && u (rr) < (1.f - d) * 0.25f) continue;   // thin it out at low density
+                raw.push_back ({ bar * 16 + n.s, n.len, n.r, false });
+            }
+            if (answer && (raw.empty() || raw.back().step % 16 < 12))
+                for (auto& n : fills[(size_t) F]) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
+            if (d > 0.7f && P.style != TwoStep) // ghost offbeat
+                if (u (rr) < (d - 0.7f) * 2.5f) raw.push_back ({ bar * 16 + 6, 1, 'R', false });
         }
+        std::sort (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step < b.step; });
+        raw.erase (std::unique (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step == b.step; }), raw.end());
     }
-    std::sort (B.begin(), B.end());
-    for (int bar = 0; bar < P.bars; ++bar)
+
+    // ---------------- pitch
+    // harmonic move: the answer bar can shift the whole line to VI, VII or iv (only with enough movement)
+    int shift[4] = { 0, 0, 0, 0 };
+    if (P.bars >= 2 && u (pr) < (m - 0.45f) * 1.6f)
     {
-        auto src = (bar % 2 == 0) ? A : B;
-        if (bar >= 2) // bars 3-4: small variation anywhere
-            for (int s = 0; s < 12; ++s)
-                if (u (rr) < P.variation * 0.18f)
-                {
-                    auto it = std::find (src.begin(), src.end(), s);
-                    if (it != src.end()) { if (src.size() > 2) src.erase (it); }
-                    else if (tp[s] > 0.2f) src.push_back (s);
-                }
-        std::sort (src.begin(), src.end());
-        for (int s : src) onsets.push_back (bar * 16 + s);
+        static const int moves[] = { -2, -1, 3 };
+        const int mv = moves[pr() % 3];
+        if (P.bars == 2) shift[1] = mv; else { shift[2] = mv; shift[3] = (u (pr) < 0.5f ? mv : 0); }
     }
-
-    // --- pitch
-    // weighted palette of scale degrees; movement pushes weight off the root
-    struct W { int deg; float w; };
-    const float m = P.movement;
-    std::vector<W> pal = { { 0, 3.2f - 2.0f * m }, { 7, 0.5f + 0.9f * m }, { 4, 0.4f + 0.9f * m }, { 6, 0.2f + 0.8f * m },
-                           { 2, 0.15f + 0.7f * m }, { -1, 0.25f + 0.6f * m }, { 3, 0.02f + 0.4f * m }, { -3, std::max (0.f, m - 0.4f) * 0.6f } };
-    if (P.style == Bouncy) pal[1].w += 1.6f;           // octave jumps
-    if (P.style == Minimal) { pal[0].w += 1.5f; }
-    if (P.style == Acid) { pal[1].w += 0.8f; pal[3].w += 0.5f; }
-    float tot = 0; for (auto& p : pal) tot += p.w;
-    auto pick = [&] () { float x = u (pr) * tot; for (auto& p : pal) { if ((x -= p.w) <= 0) return p.deg; } return 0; };
-    // a motif per 2 bars so it sounds written, not random
-    std::vector<int> motif; for (int i = 0; i < 64; ++i) motif.push_back (pick());
-
     std::vector<Note> out;
-    for (size_t i = 0; i < onsets.size(); ++i)
+    const int total = P.bars * 16;
+    for (size_t i = 0; i < raw.size(); ++i)
     {
-        Note n; n.step = onsets[i];
-        const int next = i + 1 < onsets.size() ? onsets[i + 1] : total;
-        const int gap = next - n.step;
-        int L = std::min (gap, maxLen (P.style));
-        if (P.style == TwoStep && u (pr) < 0.4f) L = std::min (gap, 4);
-        n.len = std::max (1, (int) std::round (L * (0.4f + 0.6f * P.gate)));
-        const int inBar = n.step % 16, bar = n.step / 16;
-        // first hit after the kick lands on the root more often
-        int d = motif[(size_t) (inBar + (bar % 2) * 16) % motif.size()];
-        if ((inBar == 2 || (inBar < 4 && ! (i > 0 && out.back().step / 16 == bar))) && u (pr) < 0.85f - 0.35f * m) d = 0; // anchor the bar on the root
-        if (bar == P.bars - 1 && inBar >= 12 && u (pr) < 0.5f) d = (u (pr) < 0.5f ? 4 : -1); // turnaround
-        n.deg = d;
-        const bool off = (inBar % 4) == 2;
-        n.vel = std::clamp ((int) ((off ? 112 : 92) + (u (pr) - 0.5f) * 20), 60, 127);
-        n.slide = (P.style == Acid || P.style == TwoStep) ? u (pr) < 0.25f + 0.2f * m : u (pr) < 0.06f * m;
-        if (i > 0 && out.back().step + out.back().len < n.step) n.slide = false; // only slide when legato
+        const auto& r = raw[i]; Note n; n.step = r.step;
+        const int next = i + 1 < raw.size() ? raw[i + 1].step : total;
+        n.len = std::max (1, std::min (r.len, next - r.step));
+        char role = r.r;
+        if (r.fill && m < 0.25f) role = (role == 'O' || role == 'R') ? role : 'R';     // low movement: fills stay home
+        if (! r.fill && role == 'R' && (r.step % 4) == 3 && u (pr) < m * 0.3f) role = 'O'; // octave pops on the "a"
+        if (! r.fill && role == 'O' && u (pr) < (1.f - m) * 0.4f) role = 'R';
+        n.deg = roleDeg (role) + (role == 'O' || r.fill ? 0 : 0) + shift[std::min (3, r.step / 16)];
+        if (shift[std::min (3, r.step / 16)] != 0 && role == 'O') n.deg = 7 + shift[std::min (3, r.step / 16)];
+        const int pos = r.step % 4;
+        n.vel = std::clamp ((pos == 2 ? 116 : pos == 0 ? 104 : pos == 3 ? 96 : 88) + (r.fill ? 4 : 0) + (int) ((u (pr) - 0.5f) * 12), 60, 127);
+        const bool leg = ! out.empty() && out.back().step + out.back().len >= n.step && n.deg != out.back().deg;
+        const float sp = P.style == Acid ? 0.55f : (P.style == TwoStep ? 0.35f : 0.08f * m);
+        n.slide = leg && u (pr) < sp;
         out.push_back (n);
     }
-    // legato for slides
-    for (size_t i = 0; i + 1 < out.size(); ++i)
-        if (out[i + 1].slide) out[i].len = out[i + 1].step - out[i].step;
+    for (size_t i = 0; i + 1 < out.size(); ++i) if (out[i + 1].slide) out[i].len = out[i + 1].step - out[i].step;
 
-    // --- mutations (MUTATE button): nudge a few notes
+    // ---------------- mutations (MUTATE button)
     if (P.mutations > 0 && ! out.empty())
     {
         std::mt19937 mr (P.mutateSeed);
-        for (int k = 0; k < P.mutations * 3; ++k)
+        static const char roles[] = { 'R', 'O', '5', '7', '3' };
+        for (int k = 0; k < P.mutations * 2; ++k)
         {
             auto& n = out[mr() % out.size()];
-            switch (mr() % 3)
-            {
-                case 0: n.deg = pick(); break;
-                case 1: n.deg += (n.deg >= 7 ? -7 : 7); break;
-                default: n.vel = std::clamp (n.vel + (int) (mr() % 41) - 20, 60, 127);
-            }
+            if (mr() % 3 == 0) n.vel = std::clamp (n.vel + (int) (mr() % 31) - 15, 60, 127);
+            else n.deg = roleDeg (roles[mr() % 5]);
         }
     }
     return out;

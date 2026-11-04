@@ -177,7 +177,8 @@ void UndertowProcessor::rebuildEvents()
     {
         const auto& n = pattern[i];
         const int midi = juce::jlimit (0, 127, root + degToSemi (n.deg, sc));
-        double on = beatOf (n.step), off = beatOf (n.step + n.len) - 0.01;
+        const float gk = 0.3f + 0.67f * p ("gate");
+        double on = beatOf (n.step), off = on + std::max (0.06, (beatOf (n.step + n.len) - on) * gk - 0.01);
         const bool legatoNext = i + 1 < pattern.size() && pattern[i + 1].slide && pattern[i + 1].step == n.step + n.len;
         if (legatoNext) off = beatOf (n.step + n.len) + 0.02; // overlap so the next note glides
         events.push_back ({ on, true, midi, n.vel, n.slide, (int) i });
@@ -314,7 +315,8 @@ bool UndertowProcessor::writeMidi (const juce::File& f) const
     {
         const auto& nn = pat[i]; const int m = juce::jlimit (0, 127, root + degToSemi (nn.deg, sc));
         const double on = beatOf (nn.step) * tpq;
-        double off = (beatOf (nn.step + nn.len) - 0.01) * tpq;
+        const float gk = 0.3f + 0.67f * p ("gate");
+        double off = (beatOf (nn.step) + std::max (0.06, (beatOf (nn.step + nn.len) - beatOf (nn.step)) * gk - 0.01)) * tpq;
         if (i + 1 < pat.size() && pat[i + 1].slide && pat[i + 1].step == nn.step + nn.len) off = (beatOf (nn.step + nn.len) + 0.02) * tpq;
         seq.addEvent (juce::MidiMessage::noteOn (1, m, (juce::uint8) nn.vel), on);
         seq.addEvent (juce::MidiMessage::noteOff (1, m), off);
