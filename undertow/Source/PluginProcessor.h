@@ -8,8 +8,8 @@
 namespace ut
 {
 inline const juce::StringArray keyNames { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-inline const juce::StringArray barNames { "1 bar", "2 bars", "4 bars" };
-inline const int barVals[] { 1, 2, 4 };
+inline const juce::StringArray barNames { "1 bar", "2 bars", "4 bars", "8 bars", "16 bars" };
+inline const int barVals[] { 1, 2, 4, 8, 16 };
 inline const juce::StringArray soundNames { "Sub", "Rubber", "Reese", "Organ", "Acid", "Growl" };
 
 struct Voice

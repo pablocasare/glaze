@@ -80,7 +80,7 @@ struct Roll : juce::Component
 {
     UndertowProcessor& p; const Fonts& f;
     std::vector<ut::Note> pat; int version = -1;
-    float flash[512] {};
+    float flash[2048] {};
     int hoverNote = -1;
     // edit state
     enum Drag { None, Move, Resize, Velocity } drag = None;

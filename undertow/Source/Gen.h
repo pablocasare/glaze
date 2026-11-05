@@ -186,16 +186,26 @@ inline std::vector<Note> generate (const Params& P)
         const int F1 = (int) (rr() % fills.size()), F2 = (int) (rr() % bigFills.size());
         // bar 3's variation: which beats swap to the B cell (fixed per seed so it reads as a phrase)
         const bool vary1 = u (rr) < 0.5f + v * 0.5f, vary2 = u (rr) < v * 0.6f;
+        // long phrases (8/16 bars): every 4 bars is a phrase. The 2nd phrase answers the 1st
+        // (its own fills + more B cells), the 3rd brings the hook back, the last ends on the biggest fill.
+        const int F1b = (int) (rr() % fills.size()), F2b = (int) (rr() % bigFills.size());
+        const bool vary3 = u (rr) < 0.4f + v * 0.5f;
+        std::mt19937 er (P.rhythmSeed * 1597334677u + 3u); // per-beat randomness kept stable per phrase type
         for (int bar = 0; bar < P.bars; ++bar)
             for (int beat = 0; beat < 4; ++beat)
             {
+                const int pb = bar % 4, phrase = bar / 4;
+                const bool answerPhrase = phrase % 2 == 1, last = bar == P.bars - 1;
                 const bool answer = (bar % 2 == 1) || P.bars == 1;
-                const bool turnaround = P.bars == 4 && bar == 3;
+                const bool turnaround = P.bars >= 4 && pb == 3;
+                const int f1 = answerPhrase ? F1b : F1, f2 = (answerPhrase || (last && P.bars > 4)) ? F2b : F2;
                 const Cell* c = &cells[(size_t) A]; bool fill = false;
-                if (beat == 3 && turnaround) { c = &bigFills[(size_t) F2]; fill = true; }
-                else if (beat == 3 && answer) { c = &fills[(size_t) F1]; fill = true; }
-                else if (bar == 2 && ((beat == 1 && vary1) || (beat == 2 && vary2))) c = &cells[(size_t) B];
-                else if (beat == 3 && u (rr) < 0.2f + v * 0.4f) c = &cells[(size_t) B];
+                if (beat == 3 && turnaround) { c = &bigFills[(size_t) f2]; fill = true; }
+                else if (beat == 3 && answer) { c = &fills[(size_t) f1]; fill = true; }
+                else if (pb == 2 && ((beat == 1 && vary1) || (beat == 2 && vary2))) c = &cells[(size_t) B];
+                else if (answerPhrase && pb == 0 && beat == 2 && vary3) c = &cells[(size_t) B];
+                else if (answerPhrase && pb == 2 && beat == 0) c = &cells[(size_t) B];
+                else if (beat == 3 && u (phrase == 0 ? rr : er) < 0.2f + v * 0.4f) c = &cells[(size_t) B];
                 for (auto& n : *c) raw.push_back ({ bar * 16 + beat * 4 + n.s, n.len, n.r, fill });
             }
     }
@@ -209,10 +219,15 @@ inline std::vector<Note> generate (const Params& P)
         const auto& fills = fillCells (P.style); const auto& bigFills = fillCells (-1);
         const int F = (int) (rr() % fills.size()), F2 = (int) (rr() % bigFills.size());
         std::vector<bool> drop; for (size_t k = 0; k < 8; ++k) drop.push_back (u (rr) < (1.f - d) * 0.25f); // thinning, same every bar
+        const int Fb = (int) (rr() % fills.size()), F2b = (int) (rr() % bigFills.size());
+        const bool varyB = u (rr) < 0.3f + v * 0.6f, varyB2 = u (rr) < 0.25f + v * 0.5f;
         for (int bar = 0; bar < P.bars; ++bar)
         {
-            const bool answer = (bar % 2 == 1) || P.bars == 1, turnaround = P.bars == 4 && bar == 3;
-            const auto& tp = (bar == 2 && u (rr) < 0.3f + v * 0.6f) ? T[(size_t) B] : T[(size_t) A];
+            const int pb = bar % 4, phrase = bar / 4; const bool answerPhrase = phrase % 2 == 1, last = bar == P.bars - 1;
+            const bool answer = (bar % 2 == 1) || P.bars == 1, turnaround = P.bars >= 4 && pb == 3;
+            const int F_ = answerPhrase ? Fb : F, F2_ = (answerPhrase || (last && P.bars > 4)) ? F2b : F2;
+            const bool useB = (pb == 2 && varyB) || (answerPhrase && pb == 1 && varyB2);
+            const auto& tp = useB ? T[(size_t) B] : T[(size_t) A];
             for (size_t k = 0; k < tp.size(); ++k)
             {
                 const auto& n = tp[k];
@@ -220,8 +235,8 @@ inline std::vector<Note> generate (const Params& P)
                 if (k > 0 && k < drop.size() && drop[k]) continue;
                 raw.push_back ({ bar * 16 + n.s, n.len, n.r, false });
             }
-            if (turnaround) for (auto& n : bigFills[(size_t) F2]) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
-            else if (answer) for (auto& n : fills[(size_t) F]) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
+            if (turnaround) for (auto& n : bigFills[(size_t) F2_]) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
+            else if (answer) for (auto& n : fills[(size_t) F_]) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
         }
         std::sort (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step < b.step; });
         raw.erase (std::unique (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step == b.step; }), raw.end());
@@ -229,7 +244,7 @@ inline std::vector<Note> generate (const Params& P)
 
     int shift[4]; barRoots (P, shift);
     const int nb = std::max (1, P.bars);
-    auto barShift = [&] (int step) { return shift[std::min (3, (step / 16) % nb)]; };
+    auto barShift = [&] (int step) { return shift[std::min (3, (step / 16) % std::min (nb, 4))]; };
 
     std::vector<Note> out;
     for (size_t i = 0; i < raw.size(); ++i)
@@ -252,7 +267,7 @@ inline std::vector<Note> generate (const Params& P)
     // ---------------- walk into the next chord: the last note of a bar leads to the next bar's root
     for (int bar = 0; bar < nb && nb > 1; ++bar)
     {
-        const int nextShift = shift[std::min (3, (bar + 1) % nb)], thisShift = shift[std::min (3, bar)];
+        const int cyc = std::min (nb, 4), nextShift = shift[std::min (3, ((bar + 1) % nb) % cyc)], thisShift = shift[std::min (3, bar % cyc)];
         if (nextShift == thisShift) continue;
         Note* last = nullptr;
         for (auto& n : out) if (n.step / 16 == bar && n.step % 16 >= 12) last = &n;

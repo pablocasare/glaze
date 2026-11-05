@@ -247,7 +247,7 @@ void Roll::refresh()
 {
     if (drag == None && p.patternVersion.load() != version) { pat = p.getPattern(); version = p.patternVersion.load(); computeRange(); for (auto& x : flash) x = 0; }
     const int idx = p.uiNoteIdx.exchange (-1);
-    if (idx >= 0 && idx < 512) flash[idx] = 1.f;
+    if (idx >= 0 && idx < 2048) flash[idx] = 1.f;
     for (auto& x : flash) x *= 0.84f;
 }
 
@@ -275,17 +275,18 @@ void Roll::paint (juce::Graphics& g)
     int roots[4]; p.getBarRoots (roots);
     for (int bar = 0; bar < bars; ++bar)
     {
-        const int sh = roots[std::min (3, bar)];
+        const int sh = roots[std::min (3, bar % std::min (bars, 4))], prevSh = bar > 0 ? roots[std::min (3, (bar - 1) % std::min (bars, 4))] : 999;
+        const bool compact = bars >= 8;
         const int rs = ut::degToSemi (sh, sc), third = ut::degToSemi (sh + 2, sc) - rs, fifth = ut::degToSemi (sh + 4, sc) - rs;
         const juce::String q = fifth == 6 ? "dim" : (third == 3 ? "m" : "");
         const float x0 = xOfStep (bar * 16), x1 = xOfStep ((bar + 1) * 16);
-        g.setColour (col::ink); g.setFont (f.s (12.5f));
+        g.setColour (compact && sh == prevSh ? col::faint : col::ink); g.setFont (f.s (compact ? 11.f : 12.5f));
         static const char* flatNames[] = { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" };
         g.drawText (juce::String (flatNames[((key + rs) % 12 + 12) % 12]) + q, (int) x0 + 6, 38, 80, 16, juce::Justification::left);
         static const char* rom[] = { "i", "ii", "iii", "iv", "v", "vi", "vii" };
         juce::String rn = rom[((sh % 7) + 7) % 7]; if (third == 4) rn = rn.toUpperCase();
-        g.setColour (col::dim); g.setFont (f.n (10)); g.drawText (rn, (int) x1 - 46, 38, 40, 16, juce::Justification::right);
-        if (bar > 0) { g.setColour (col::screenBar); g.fillRect (x0, 36.f, 1.f, 20.f); }
+        if (! compact) { g.setColour (col::dim); g.setFont (f.n (10)); g.drawText (rn, (int) x1 - 46, 38, 40, 16, juce::Justification::right); }
+        if (bar > 0) { g.setColour (bar % 4 == 0 ? col::sigDim : col::screenBar); g.fillRect (x0, 36.f, 1.f, 20.f); }
     }
     // kick row
     const bool kickOn = p.p ("kick") > 0.5f;
@@ -323,7 +324,7 @@ void Roll::paint (juce::Graphics& g)
     for (size_t i = 0; i < pat.size(); ++i)
     {
         const auto& n = pat[i]; auto r = noteRect (n);
-        const float fl = i < 512 ? flash[i] : 0.f, v = n.vel / 127.f;
+        const float fl = i < 2048 ? flash[i] : 0.f, v = n.vel / 127.f;
         const bool hv = (int) i == hoverNote || (int) i == dragIdx;
         if (n.ghost)
         {
@@ -344,13 +345,13 @@ void Roll::paint (juce::Graphics& g)
     for (size_t i = 0; i < pat.size(); ++i)
     {
         const auto& n = pat[i]; const auto r = noteRect (n);
-        const float x = r.getX() + 2.5f, h = (vA.getHeight() - 10) * n.vel / 127.f, fl = i < 512 ? flash[i] : 0.f;
+        const float x = r.getX() + 2.5f, h = (vA.getHeight() - 10) * n.vel / 127.f, fl = i < 2048 ? flash[i] : 0.f;
         g.setColour ((n.ghost ? col::sigDim : col::sig).interpolatedWith (col::ink, fl * 0.6f));
         g.fillRect (x - 1.f, vA.getBottom() - 4 - h, 2.f, h);
         g.fillRect (x - 3.f, vA.getBottom() - 4 - h, 6.f, 2.f);
     }
     g.setFont (f.n (10));
-    for (int s = 0; s < steps; s += 4)
+    for (int s = 0; s < steps; s += (bars >= 8 ? 16 : 4))
     {
         g.setColour (s % 16 == 0 ? col::label : col::faint);
         g.drawText (juce::String (s / 16 + 1) + (s % 16 ? "." + juce::String (s % 16 / 4 + 1) : ""), (int) xOfStep (s) + 3, (int) vA.getBottom() + 4, 40, 14, juce::Justification::left);

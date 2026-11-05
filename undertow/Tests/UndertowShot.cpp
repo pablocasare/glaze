@@ -17,7 +17,7 @@ int main (int argc, char** argv)
     out.createDirectory();
     const double sr = 48000; const int block = 256;
     struct Case { const char* name; int style, key, scale, sound; float bpm, swing; int bars; };
-    const Case cases[] = { { "rolling", 0, 9, 0, 1, 128, 0.56f, 2 }, { "bouncy", 1, 5, 1, 0, 126, 0.55f, 2 }, { "offbeat", 2, 7, 0, 3, 124, 0.54f, 2 },
+    const Case cases[] = { { "rolling", 0, 9, 0, 1, 128, 0.56f, 8 }, { "bouncy", 1, 5, 1, 0, 126, 0.55f, 16 }, { "offbeat", 2, 7, 0, 3, 124, 0.54f, 2 },
                            { "2step", 3, 2, 0, 2, 134, 0.66f, 4 }, { "minimal", 4, 0, 2, 0, 128, 0.58f, 2 }, { "driving", 5, 9, 0, 5, 130, 0.52f, 2 },
                            { "broken", 6, 4, 0, 1, 127, 0.6f, 4 }, { "acid", 7, 9, 2, 4, 130, 0.54f, 2 }, { "speedgarage", 8, 9, 0, 2, 132, 0.6f, 4 }, { "afro", 9, 2, 1, 0, 124, 0.55f, 2 }, { "deeptech", 10, 7, 0, 0, 128, 0.56f, 4 }, { "bassline", 11, 5, 0, 1, 132, 0.52f, 4 } };
     int failures = 0;
@@ -25,7 +25,7 @@ int main (int argc, char** argv)
     {
         UndertowProcessor p; Head h; h.bpm = c.bpm; p.setPlayHead (&h);
         setP (p, "style", (float) c.style); setP (p, "key", (float) c.key); setP (p, "scale", (float) c.scale); setP (p, "sound", (float) c.sound);
-        setP (p, "swing", c.swing); setP (p, "chords", (float) ((c.style * 3) % ut::NumChords)); setP (p, "ghosts", 0.5f); setP (p, "bars", c.bars == 1 ? 0.f : (c.bars == 2 ? 1.f : 2.f));
+        setP (p, "swing", c.swing); setP (p, "chords", (float) ((c.style * 3) % ut::NumChords)); setP (p, "ghosts", 0.5f); setP (p, "bars", c.bars == 1 ? 0.f : c.bars == 2 ? 1.f : c.bars == 4 ? 2.f : c.bars == 8 ? 3.f : 4.f);
         p.prepareToPlay (sr, block);
         p.regenerate();
         auto pat = p.getPattern();
@@ -34,7 +34,7 @@ int main (int argc, char** argv)
         std::printf ("\n");
         if (pat.size() < 3) ++failures;
         // render 8 bars
-        const int len = (int) (8 * 4 * 60.0 / c.bpm * sr);
+        const int len = (int) (std::max (8, c.bars) * 4 * 60.0 / c.bpm * sr);
         juce::AudioBuffer<float> all (2, len), buf (2, block); juce::MidiBuffer m;
         std::unique_ptr<UndertowEditor> ed (dynamic_cast<UndertowEditor*> (p.createEditor()));
         int midiOn = 0; float pk = 0; bool shot = false;
