@@ -686,7 +686,7 @@ UndertowEditor::UndertowEditor (UndertowProcessor& p) : AudioProcessorEditor (&p
     setSize (utui::Content::W, utui::Content::H);
     startTimerHz (60);
 }
-UndertowEditor::~UndertowEditor() { setLookAndFeel (nullptr); }
+UndertowEditor::~UndertowEditor() { proc.internalPlay = false; setLookAndFeel (nullptr); } // closing the window stops the preview
 void UndertowEditor::resized()
 {
     const float s = (float) getWidth() / utui::Content::W;

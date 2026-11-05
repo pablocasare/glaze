@@ -367,6 +367,7 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
             if (auto q = pos->getPpqPosition()) ppq = *q;
         }
     bpm = (float) hostBpm;
+    if (hostPlaying) internalPlay = false; // the DAW took over: don't start playing again by itself when it stops
     const bool internal = internalPlay.load() && ! hostPlaying;
     const bool playing = hostPlaying || internal;
     if (internal) { if (! wasPlaying) internalPpq = 0; ppq = internalPpq; }

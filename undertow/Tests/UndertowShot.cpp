@@ -122,6 +122,15 @@ int main (int argc, char** argv)
         const bool ok = tk == 4 && endT > 12 * 4 * 960 && ons > (int) a.getPattern().size() * 3;
         std::printf ("%s print %d takes (%d notes, ends beat %.0f)\n", ok ? "PASS" : "FAIL", tk, ons, endT / 960); failures += ! ok;
     }
+    // preview play stops when the DAW plays, and doesn't come back on by itself when the DAW stops
+    {
+        UndertowProcessor a; Head h; h.bpm = 128; a.setPlayHead (&h); a.prepareToPlay (48000, 256); a.regenerate();
+        juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m;
+        a.internalPlay = true; h.playing = true; for (int k = 0; k < 20; ++k) a.processBlock (buf, m);
+        h.playing = false; float pk = 0; for (int k = 0; k < 400; ++k) { a.processBlock (buf, m); if (k > 120) pk = std::max (pk, buf.getMagnitude (0, 256)); }
+        const bool ok = ! a.internalPlay.load() && pk < 0.01f;
+        std::printf ("%s silent after the DAW stops\n", ok ? "PASS" : "FAIL"); failures += ! ok;
+    }
     // GENERATE gives a different bassline every press
     {
         UndertowProcessor a; std::set<std::string> seen;
