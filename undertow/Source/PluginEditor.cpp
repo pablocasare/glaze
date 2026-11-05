@@ -576,7 +576,7 @@ void Content::paint (juce::Graphics& g)
     g.setColour (col::label); g.setFont (fonts.caps (9)); g.drawText ("BASSLINE GENERATOR", 63, 40, 200, 12, juce::Justification::left);
     auto tw = fonts.s (12); tw.setExtraKerningFactor (0.14f);
     g.setColour (col::ink.withAlpha (0.9f)); g.setFont (tw); g.drawText ("TOKEN WISE", W - 182, 18, 160, 16, juce::Justification::right);
-    g.setColour (col::dim); g.setFont (fonts.n (10)); g.drawText ("v1.2", W - 182, 36, 160, 12, juce::Justification::right);
+    g.setColour (col::dim); g.setFont (fonts.n (10)); g.drawText ("v2.0", W - 182, 36, 160, 12, juce::Justification::right);
     g.setColour (col::label); g.setFont (fonts.caps (9));
     for (auto [x, t] : { std::pair<int, const char*> { 22, "KEY" }, { 96, "OCT" }, { 158, "SCALE" }, { 290, "BARS" }, { 380, "CHORDS" } })
         g.drawText (t, x + 1, 76, 120, 12, juce::Justification::left);

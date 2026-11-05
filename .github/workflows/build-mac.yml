@@ -100,7 +100,7 @@ jobs:
           cp "packaging/Install Undertow.command" dist/Undertow/
           cp packaging/README-Undertow.txt dist/Undertow/README.txt
           chmod +x "dist/Undertow/Install Undertow.command"
-          cd dist && ditto -c -k --keepParent Undertow Undertow-mac.zip && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip && ditto -c -k --keepParent Liftoff Liftoff-mac.zip
+          cd dist && ditto -c -k --keepParent Undertow Undertow-v2-mac.zip && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip && ditto -c -k --keepParent Liftoff Liftoff-mac.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -124,18 +124,18 @@ jobs:
           mkdir -p "$R/VST3" "$R/Components"
           cp -R "$U/VST3/Undertow.vst3" "$R/VST3/"
           cp -R "$U/AU/Undertow.component" "$R/Components/"
-          pkgbuild --root pkgroot --install-location / --identifier com.tokenwise.undertow.pkg --version 1.0.0 \
-            --scripts packaging/undertow-scripts dist/Undertow-Installer.pkg
+          pkgbuild --root pkgroot --install-location / --identifier com.tokenwise.undertow.pkg --version 2.0.0 \
+            --scripts packaging/undertow-scripts dist/Undertow-v2-Installer.pkg
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Undertow-mac
-          path: dist/Undertow-mac.zip
+          name: Undertow-v2-mac
+          path: dist/Undertow-v2-mac.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Undertow-Installer
-          path: dist/Undertow-Installer.pkg
+          name: Undertow-v2-Installer
+          path: dist/Undertow-v2-Installer.pkg
 
       - name: Publish release (when a v* tag is pushed)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -145,4 +145,4 @@ jobs:
             dist/Glaze-mac.zip
             dist/Pump-mac.zip
             dist/Liftoff-mac.zip
-            dist/Undertow-mac.zip
+            dist/Undertow-v2-mac.zip

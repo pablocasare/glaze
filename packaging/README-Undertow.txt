@@ -1,4 +1,4 @@
-UNDERTOW - bassline generator by Token Wise (VST3 + AU instrument, Apple Silicon + Intel)
+UNDERTOW - bassline generator by Token Wise (VST3 + AU instrument, Apple Silicon + Intel) (v2.0)
 
 INSTALL
   1. Right-click "Install Undertow.command" > Open > Open
