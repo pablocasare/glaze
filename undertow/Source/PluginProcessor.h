@@ -105,7 +105,7 @@ private:
     void parameterChanged (const juce::String& id, float) override;
     std::atomic<bool> dirty { true }, renderDirty { false };
 
-    struct Seeds { uint32_t r = 11, p = 7, m = 0; int muts = 0; };
+    struct Seeds { uint32_t r = 11, p = 7, m = 0, take = 0; int muts = 0; };
     Seeds seeds;
     struct Snapshot { Seeds seeds; std::vector<ut::Note> pat; bool edited = false; };
     std::vector<Snapshot> history, future;
@@ -127,4 +127,6 @@ private:
     double sr = 44100, internalPpq = 0; bool wasPlaying = false;
     int sounding = -1;
     float duck = 1;
+    double hostOffset = 0, lastHostEnd = -1; long long lastCycle = -1;
+    std::atomic<bool> wrapped { false };
 };

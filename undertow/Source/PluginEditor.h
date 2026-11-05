@@ -131,9 +131,9 @@ struct Content : juce::Component
     std::vector<std::unique_ptr<Knob>> knobs;
     juce::ComboBox key, scale, octave, bars, chords, sound;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> combos;
-    Btn generate { fonts, "GENERATE", Btn::Primary }, mutate { fonts, "MUTATE" }, undo { fonts, "UNDO" }, redo { fonts, "REDO" },
+    Btn generate { fonts, "GENERATE", Btn::Primary }, mutate { fonts, "VARY" }, undo { fonts, "UNDO" }, redo { fonts, "REDO" },
         play { fonts, "", Btn::Plain }, kick { fonts, "KICK", Btn::Toggle }, lockR { fonts, "RHYTHM", Btn::Toggle }, lockP { fonts, "PITCH", Btn::Toggle },
-        exportB { fonts, "EXPORT" }, clear { fonts, "CLEAR" };
+        exportB { fonts, "EXPORT" }, clear { fonts, "CLEAR" }, evolve { fonts, "EVOLVE", Btn::Toggle };
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> btns;
     std::unique_ptr<juce::FileChooser> chooser;
     Content (UndertowProcessor&, const Fonts&);

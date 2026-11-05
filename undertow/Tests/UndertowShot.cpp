@@ -1,3 +1,5 @@
+#include <set>
+#include <string>
 // Offline: UndertowShot outDir  -> screenshots, demo audio, MIDI for several styles
 #include "../Source/PluginEditor.h"
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -62,6 +64,39 @@ int main (int argc, char** argv)
         if (auto os = wf.createOutputStream())
             if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (os.get(), sr, 2, 24, {}, 0))) { os.release(); w->writeFromAudioSampleBuffer (all, 0, len); }
         p.writeMidi (out.getChildFile (juce::String ("bass_") + c.name + ".mid"));
+    }
+    // DAW loops a 1-bar region: every bar of a 4-bar pattern must still get played
+    {
+        UndertowProcessor a; Head h; h.bpm = 128; a.setPlayHead (&h); a.prepareToPlay (48000, 256);
+        setP (a, "bars", 2.f); setP (a, "evolve", 0.f); a.pump(); a.regenerate();
+        auto pat = a.getPattern(); std::set<int> want; for (auto& n : pat) want.insert (n.step / 16);
+        juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m; double played = 0; std::set<int> heard;
+        for (int blk = 0; blk < 2000; ++blk)
+        {
+            a.processBlock (buf, m);
+            for (const auto md : m) if (md.getMessage().isNoteOn()) heard.insert ((int) std::floor (std::fmod (played + md.samplePosition * 128 / 60.0 / 48000, 16.0) / 4));
+            h.ppq += 256 * 128 / 60.0 / 48000; played += 256 * 128 / 60.0 / 48000;
+            if (h.ppq >= 4.0) h.ppq -= 4.0; // host loops bar 1
+        }
+        const bool ok = heard.size() >= want.size();
+        std::printf ("%s host 1-bar loop still plays all %d bars (heard %d)\n", ok ? "PASS" : "FAIL", (int) want.size(), (int) heard.size()); failures += ! ok;
+    }
+    // EVOLVE: the pattern changes after it comes around, but bar 1 (the hook) stays
+    {
+        UndertowProcessor a; Head h; h.bpm = 128; a.setPlayHead (&h); a.prepareToPlay (48000, 256);
+        setP (a, "bars", 2.f); setP (a, "evolve", 1.f); a.pump(); a.regenerate(); auto p1 = a.getPattern();
+        juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m;
+        for (int blk = 0; blk < 1500; ++blk) { a.processBlock (buf, m); h.ppq += 256 * 128 / 60.0 / 48000; if (blk % 10 == 0) a.pump(); }
+        auto p2 = a.getPattern();
+        auto key = [] (const std::vector<ut::Note>& v, bool firstBar) { std::string s; for (auto& n : v) if ((n.step < 16) == firstBar && ! n.ghost) s += std::to_string (n.step) + ":" + std::to_string (n.deg) + " "; return s; };
+        const bool changed = key (p1, false) != key (p2, false), hookKept = key (p1, true) == key (p2, true);
+        std::printf ("%s evolve changes the take\n%s evolve keeps the hook\n", changed ? "PASS" : "FAIL", hookKept ? "PASS" : "FAIL"); failures += ! changed + ! hookKept;
+    }
+    // GENERATE gives a different bassline every press
+    {
+        UndertowProcessor a; std::set<std::string> seen;
+        for (int k = 0; k < 20; ++k) { a.generateNew(); std::string s; for (auto& n : a.getPattern()) s += std::to_string (n.step) + ":" + std::to_string (n.deg) + " "; seen.insert (s); }
+        std::printf ("%s generate: %d/20 different\n", seen.size() >= 19 ? "PASS" : "FAIL", (int) seen.size()); failures += seen.size() < 19;
     }
     // determinism + mutate + undo + state
     {

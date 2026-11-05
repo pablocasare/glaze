@@ -125,6 +125,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "kick", 1 }, "Kick Preview", true));
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "lockRhythm", 1 }, "Lock Rhythm", false));
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "lockPitch", 1 }, "Lock Pitch", false));
+    v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "evolve", 1 }, "Evolve", true));
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "mute", 1 }, "Mute Sound (MIDI only)", false));
     return { v.begin(), v.end() };
 }
@@ -224,7 +225,7 @@ ut::Params UndertowProcessor::currentParams() const
     P.style = (int) p ("style"); P.bars = bars();
     P.density = p ("density"); P.movement = p ("movement"); P.variation = p ("variation"); P.gate = p ("gate");
     P.chords = (int) p ("chords"); P.ghosts = p ("ghosts"); P.accent = p ("accent");
-    P.rhythmSeed = seeds.r; P.pitchSeed = seeds.p; P.mutateSeed = seeds.m; P.mutations = seeds.muts;
+    P.rhythmSeed = seeds.r; P.pitchSeed = seeds.p; P.take = seeds.take; P.mutateSeed = seeds.m; P.mutations = seeds.muts;
     return P;
 }
 
@@ -264,6 +265,8 @@ void UndertowProcessor::rebuildEvents()
 
 void UndertowProcessor::timerCallback()
 {
+    // EVOLVE: every time the pattern comes around, play a new take on it (same hook, new variations + fills)
+    if (wrapped.exchange (false) && p ("evolve") > 0.5f && ! edited && bars() > 1) { seeds.take++; dirty = true; }
     if (dirty.exchange (false)) { renderDirty = false; regenerate(); }
     else if (renderDirty.exchange (false)) { { const juce::SpinLock::ScopedLockType l (patLock); rebuildEvents(); } patternVersion++; }
 }
@@ -273,7 +276,7 @@ void UndertowProcessor::generateNew()
     pushHistory(); edited = false;
     if (p ("lockRhythm") < 0.5f) seeds.r = (uint32_t) rnd.nextInt();
     if (p ("lockPitch") < 0.5f) seeds.p = (uint32_t) rnd.nextInt();
-    seeds.muts = 0; seeds.m = (uint32_t) rnd.nextInt() | 1u;
+    seeds.muts = 0; seeds.take = 0; seeds.m = (uint32_t) rnd.nextInt() | 1u;
     regenerate();
 }
 void UndertowProcessor::mutate()
@@ -314,6 +317,23 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
     const bool playing = hostPlaying || internal;
     if (internal) { if (! wasPlaying) internalPpq = 0; ppq = internalPpq; }
     const double bps = hostBpm / 60.0 / sr;
+    // if the DAW loops a region shorter than the pattern (FL pattern mode, a 1-bar cycle...), don't restart
+    // the bassline every time: keep counting forward so every bar gets played
+    if (hostPlaying)
+    {
+        if (! wasPlaying || lastHostEnd < 0) hostOffset = 0;
+        else if (ppq < lastHostEnd - 0.05) hostOffset += lastHostEnd - ppq;   // host jumped back (loop)
+        else if (ppq > lastHostEnd + 0.5) hostOffset = 0;                     // user jumped forward: follow
+        lastHostEnd = ppq + n * bps;
+        ppq += hostOffset;
+    }
+    else lastHostEnd = -1;
+    if (playing && loopBeats > 0)
+    {
+        const auto cyc = (long long) std::floor (ppq / loopBeats);
+        if (! wasPlaying) lastCycle = cyc;
+        else if (cyc != lastCycle) { lastCycle = cyc; wrapped = true; }
+    }
 
     if (! playing)
     {
@@ -416,7 +436,7 @@ void UndertowProcessor::getStateInformation (juce::MemoryBlock& mb)
 {
     auto st = apvts.copyState();
     st.setProperty ("seedR", (juce::int64) seeds.r, nullptr); st.setProperty ("seedP", (juce::int64) seeds.p, nullptr);
-    st.setProperty ("seedM", (juce::int64) seeds.m, nullptr); st.setProperty ("muts", seeds.muts, nullptr);
+    st.setProperty ("seedM", (juce::int64) seeds.m, nullptr); st.setProperty ("muts", seeds.muts, nullptr); st.setProperty ("take", (juce::int64) seeds.take, nullptr);
     st.setProperty ("edited", edited, nullptr); st.setProperty ("preset", currentPreset, nullptr);
     st.removeChild (st.getChildWithName ("PATTERN"), nullptr);
     if (edited)
@@ -440,7 +460,7 @@ void UndertowProcessor::setStateInformation (const void* d, int s)
         auto st = juce::ValueTree::fromXml (*xml);
         if (! st.isValid()) return;
         seeds.r = (uint32_t) (juce::int64) st.getProperty ("seedR", 11); seeds.p = (uint32_t) (juce::int64) st.getProperty ("seedP", 7);
-        seeds.m = (uint32_t) (juce::int64) st.getProperty ("seedM", 0); seeds.muts = st.getProperty ("muts", 0);
+        seeds.m = (uint32_t) (juce::int64) st.getProperty ("seedM", 0); seeds.muts = st.getProperty ("muts", 0); seeds.take = (uint32_t) (juce::int64) st.getProperty ("take", 0);
         currentPreset = st.getProperty ("preset", 0);
         auto pt = st.getChildWithName ("PATTERN");
         std::vector<ut::Note> notes;

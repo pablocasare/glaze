@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 
 namespace ut
 {
@@ -70,7 +71,7 @@ struct Params
 {
     int style = Rolling, bars = 2, chords = ChordAuto;
     float density = 0.6f, movement = 0.45f, variation = 0.3f, gate = 0.8f, ghosts = 0.3f, accent = 0.5f;
-    uint32_t rhythmSeed = 1, pitchSeed = 1, mutateSeed = 0;
+    uint32_t rhythmSeed = 1, pitchSeed = 1, mutateSeed = 0, take = 0; // take: EVOLVE's new take on the variations each loop
     int mutations = 0;
 };
 
@@ -89,7 +90,7 @@ inline const std::vector<Cell>& beatCells (int style)
 {
     static const std::vector<Cell> rolling { { { 2, 2, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 3, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } },
                                              { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
-    static const std::vector<Cell> offbeat { { { 2, 2, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } } };
+    static const std::vector<Cell> offbeat { { { 2, 2, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 2, 1, 'R' } }, { { 2, 3, 'R' } }, { { 2, 1, 'O' }, { 3, 1, 'R' } } };
     static const std::vector<Cell> bouncy { { { 2, 1, 'O' } }, { { 2, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 1, 1, 'O' }, { 2, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
     static const std::vector<Cell> driving { { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
     static const std::vector<Cell> acid { { { 0, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 0, 2, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 2, 'O' } },
@@ -168,79 +169,104 @@ inline std::vector<Note> generate (const Params& P)
 {
     std::mt19937 rr (P.rhythmSeed * 2654435761u + (uint32_t) P.style * 97u), pr (P.pitchSeed * 40503u + 7u), gr (P.rhythmSeed * 69069u + 1u);
     auto u = [] (std::mt19937& g) { return std::uniform_real_distribution<float> (0.f, 1.f) (g); };
-    auto pickIdx = [&] (int n, float centre) { // around centre (0..1), a little random
-        const float x = std::clamp (centre * (n - 1) + (u (rr) - 0.5f) * 1.6f, 0.f, (float) (n - 1)); return (int) std::lround (x); };
     const float m = P.movement, v = P.variation, d = P.density;
     const int total = P.bars * 16;
-
+    // pitch palette: a cell's role is kept, or (more often with MOVEMENT) swapped for another chord tone
+    const bool octavey = P.style == Bouncy || P.style == Bassline || P.style == SpeedGarage || P.style == Acid;
+    auto rollRole = [&] (char r, std::mt19937& g) -> char {
+        if (u (g) > 0.25f + m * 0.6f) return r;
+        const float w[] = { 1.0f, octavey ? 0.9f : 0.35f, 0.45f * m + 0.05f, 0.4f * m + 0.05f, 0.3f * m, 0.25f * m, 0.12f * m, 0.12f * m };
+        static const char rs[] = { 'R', 'O', '5', '7', '3', '4', '6', '2' };
+        float t = 0; for (float x : w) t += x;
+        float x = u (g) * t; for (int i = 0; i < 8; ++i) { x -= w[i]; if (x <= 0) return rs[i]; }
+        return 'R'; };
+    auto rollLen = [&] (int len, std::mt19937& g) { return (u (g) < 0.25f) ? std::max (1, len + ((g() & 1) ? 1 : -1)) : len; };
     struct Raw { int step, len; char r; bool fill; };
     std::vector<Raw> raw;
+    using Bar = std::vector<Raw>; // one bar, steps 0..15
+    const auto& fills = fillCells (P.style); const auto& bigFills = fillCells (-1);
+    Bar hook;
+    std::function<Bar (std::mt19937&, int)> varyBeats; // re-write n beats of the hook
     if (usesBeatCells (P.style))
     {
-        const auto& cells = beatCells (P.style); const auto& fills = fillCells (P.style); const auto& bigFills = fillCells (-1);
-        std::vector<int> order (cells.size()); for (size_t i = 0; i < order.size(); ++i) order[i] = (int) i;
-        std::stable_sort (order.begin(), order.end(), [&] (int a, int b) { return cells[(size_t) a].size() < cells[(size_t) b].size(); });
-        const int A = order[(size_t) pickIdx ((int) cells.size(), d)];
-        int B = order[(size_t) pickIdx ((int) cells.size(), std::min (1.f, d + 0.2f))];
-        if (B == A) B = order[(size_t) ((std::find (order.begin(), order.end(), A) - order.begin() + 1) % (int) order.size())];
-        const int F1 = (int) (rr() % fills.size()), F2 = (int) (rr() % bigFills.size());
-        // bar 3's variation: which beats swap to the B cell (fixed per seed so it reads as a phrase)
-        const bool vary1 = u (rr) < 0.5f + v * 0.5f, vary2 = u (rr) < v * 0.6f;
-        // long phrases (8/16 bars): every 4 bars is a phrase. The 2nd phrase answers the 1st
-        // (its own fills + more B cells), the 3rd brings the hook back, the last ends on the biggest fill.
-        const int F1b = (int) (rr() % fills.size()), F2b = (int) (rr() % bigFills.size());
-        const bool vary3 = u (rr) < 0.4f + v * 0.5f;
-        std::mt19937 er (P.rhythmSeed * 1597334677u + 3u); // per-beat randomness kept stable per phrase type
-        for (int bar = 0; bar < P.bars; ++bar)
-            for (int beat = 0; beat < 4; ++beat)
+        const auto& cells = beatCells (P.style);
+        // the hook is a whole bar made of 2-3 different one-beat cells in a form (AAAB, ABAB, AABA, ABAC, ABBA)
+        auto pick = [&] () { // denser cells more likely with DENSITY
+            std::vector<float> w; for (auto& c : cells) w.push_back (0.25f + std::pow (std::max (0.05f, 1.f - std::abs ((float) c.size() / 3.f - d * 1.2f)), 2.f));
+            float t = 0; for (float x : w) t += x; float x = u (rr) * t;
+            for (size_t i = 0; i < w.size(); ++i) { x -= w[i]; if (x <= 0) return (int) i; } return 0; };
+        int X = pick(), Y = pick(), Z = pick(); for (int k = 0; Y == X && k < 6; ++k) Y = pick(); for (int k = 0; (Z == X || Z == Y) && k < 6; ++k) Z = pick();
+        static const int forms[][4] = { { 0, 0, 0, 1 }, { 0, 1, 0, 1 }, { 0, 0, 1, 0 }, { 0, 1, 0, 2 }, { 0, 1, 1, 0 }, { 0, 0, 0, 0 } };
+        const int form = (int) (rr() % (d < 0.35f ? 6 : 5));
+        const int ids[] = { X, Y, Z };
+        for (int beat = 0; beat < 4; ++beat)
+            for (auto& n : cells[(size_t) ids[forms[form][beat]]]) hook.push_back ({ beat * 4 + n.s, n.len, n.r, false });
+        for (auto& n : hook) n.r = rollRole (n.r, pr);
+        // keep a strong first note: beat 1's first hit is the root
+        if (! hook.empty()) hook[0].r = 'R';
+        varyBeats = [&cells, &hook, &rollRole, &pr, u] (std::mt19937& g, int nBeats) {
+            Bar b = hook;
+            for (int k = 0; k < nBeats; ++k)
             {
-                const int pb = bar % 4, phrase = bar / 4;
-                const bool answerPhrase = phrase % 2 == 1, last = bar == P.bars - 1;
-                const bool answer = (bar % 2 == 1) || P.bars == 1;
-                const bool turnaround = P.bars >= 4 && pb == 3;
-                const int f1 = answerPhrase ? F1b : F1, f2 = (answerPhrase || (last && P.bars > 4)) ? F2b : F2;
-                const Cell* c = &cells[(size_t) A]; bool fill = false;
-                if (beat == 3 && turnaround) { c = &bigFills[(size_t) f2]; fill = true; }
-                else if (beat == 3 && answer) { c = &fills[(size_t) f1]; fill = true; }
-                else if (pb == 2 && ((beat == 1 && vary1) || (beat == 2 && vary2))) c = &cells[(size_t) B];
-                else if (answerPhrase && pb == 0 && beat == 2 && vary3) c = &cells[(size_t) B];
-                else if (answerPhrase && pb == 2 && beat == 0) c = &cells[(size_t) B];
-                else if (beat == 3 && u (phrase == 0 ? rr : er) < 0.2f + v * 0.4f) c = &cells[(size_t) B];
-                for (auto& n : *c) raw.push_back ({ bar * 16 + beat * 4 + n.s, n.len, n.r, fill });
+                const int beat = 1 + (int) (g() % 3);
+                b.erase (std::remove_if (b.begin(), b.end(), [&] (const Raw& r) { return r.step / 4 == beat; }), b.end());
+                for (auto& n : cells[g() % cells.size()]) b.push_back ({ beat * 4 + n.s, n.len, rollRole (n.r, g), false });
             }
+            std::sort (b.begin(), b.end(), [] (const Raw& a, const Raw& c) { return a.step < c.step; });
+            return b; };
     }
     else
     {
         const auto& T = barTemplates (P.style);
-        std::vector<int> order (T.size()); for (size_t i = 0; i < order.size(); ++i) order[i] = (int) i;
-        std::stable_sort (order.begin(), order.end(), [&] (int a, int b) { return T[(size_t) a].size() < T[(size_t) b].size(); });
-        const int A = order[(size_t) pickIdx ((int) T.size(), d)];
-        int B = order[(size_t) pickIdx ((int) T.size(), std::min (1.f, d + 0.3f))]; if (B == A) B = (A + 1) % (int) T.size();
-        const auto& fills = fillCells (P.style); const auto& bigFills = fillCells (-1);
-        const int F = (int) (rr() % fills.size()), F2 = (int) (rr() % bigFills.size());
-        std::vector<bool> drop; for (size_t k = 0; k < 8; ++k) drop.push_back (u (rr) < (1.f - d) * 0.25f); // thinning, same every bar
-        const int Fb = (int) (rr() % fills.size()), F2b = (int) (rr() % bigFills.size());
-        const bool varyB = u (rr) < 0.3f + v * 0.6f, varyB2 = u (rr) < 0.25f + v * 0.5f;
-        for (int bar = 0; bar < P.bars; ++bar)
+        const int A = (int) (rr() % T.size());
+        for (auto& n : T[(size_t) A]) hook.push_back ({ n.s, n.len, n.r, false });
+        for (size_t k = 1; k < hook.size(); ++k) if (u (rr) < (1.f - d) * 0.3f) hook[k].len = -1; // thinning
+        hook.erase (std::remove_if (hook.begin(), hook.end(), [] (const Raw& r) { return r.len < 0; }), hook.end());
+        // nudge one or two hits a 16th (keeps the groove but makes it ours)
+        for (int k = 0; k < 2; ++k) if (u (rr) < 0.5f && hook.size() > 2)
         {
-            const int pb = bar % 4, phrase = bar / 4; const bool answerPhrase = phrase % 2 == 1, last = bar == P.bars - 1;
-            const bool answer = (bar % 2 == 1) || P.bars == 1, turnaround = P.bars >= 4 && pb == 3;
-            const int F_ = answerPhrase ? Fb : F, F2_ = (answerPhrase || (last && P.bars > 4)) ? F2b : F2;
-            const bool useB = (pb == 2 && varyB) || (answerPhrase && pb == 1 && varyB2);
-            const auto& tp = useB ? T[(size_t) B] : T[(size_t) A];
-            for (size_t k = 0; k < tp.size(); ++k)
-            {
-                const auto& n = tp[k];
-                if ((answer || turnaround) && n.s >= 12) continue; // replaced by the fill
-                if (k > 0 && k < drop.size() && drop[k]) continue;
-                raw.push_back ({ bar * 16 + n.s, n.len, n.r, false });
-            }
-            if (turnaround) for (auto& n : bigFills[(size_t) F2_]) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
-            else if (answer) for (auto& n : fills[(size_t) F_]) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
+            auto& n = hook[1 + rr() % (hook.size() - 1)]; const int ns = n.step + ((rr() & 1) ? 1 : -1);
+            bool clash = ns < 1 || ns > 15; for (auto& o : hook) clash |= (&o != &n && o.step == ns);
+            if (! clash) n.step = ns;
         }
-        std::sort (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step < b.step; });
-        raw.erase (std::unique (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step == b.step; }), raw.end());
+        std::sort (hook.begin(), hook.end(), [] (const Raw& a, const Raw& c) { return a.step < c.step; });
+        for (auto& n : hook) { n.r = rollRole (n.r, pr); n.len = rollLen (n.len, rr); }
+        if (! hook.empty()) hook[0].r = 'R';
+        varyBeats = [&T, &hook, &rollRole, u] (std::mt19937& g, int nBeats) {
+            Bar b = hook; const auto& alt = T[g() % T.size()];
+            for (int k = 0; k < nBeats; ++k)
+            {
+                const int beat = 1 + (int) (g() % 3);
+                b.erase (std::remove_if (b.begin(), b.end(), [&] (const Raw& r) { return r.step / 4 == beat; }), b.end());
+                for (auto& n : alt) if (n.s / 4 == beat) b.push_back ({ n.s, n.len, rollRole (n.r, g), false });
+            }
+            std::sort (b.begin(), b.end(), [] (const Raw& a, const Raw& c) { return a.step < c.step; });
+            return b; };
     }
+    // phrase plan: bar 2 answers with a fill, bar 3 rewrites some beats (VARIATION), bar 4 turns around.
+    // 8/16 bars: the 2nd 4-bar phrase is an answer with its own variations and fills.
+    std::mt19937 vr (P.rhythmSeed * 1597334677u + 3u + P.take * 2654435761u);
+    const int nVary = 1 + (int) std::lround (v * 2.f);
+    const Bar var3 = varyBeats (vr, nVary), var3b = varyBeats (vr, nVary), ansA = varyBeats (vr, std::max (1, nVary - 1)), ansB = varyBeats (vr, nVary + 1);
+    std::mt19937& fr = P.take ? vr : rr;
+    const int F1 = (int) (fr() % fills.size()), F2 = (int) (fr() % bigFills.size()), F1b = (int) (fr() % fills.size()), F2b = (int) (fr() % bigFills.size());
+    for (int bar = 0; bar < P.bars; ++bar)
+    {
+        const int pb = bar % 4, phrase = bar / 4;
+        const bool answerPhrase = phrase % 2 == 1, last = bar == P.bars - 1;
+        const bool answer = (bar % 2 == 1) || P.bars == 1, turnaround = P.bars >= 4 && pb == 3;
+        const Bar* src = &hook;
+        if (answerPhrase) src = (pb == 2) ? &var3b : (pb == 1 ? &ansA : (pb == 3 ? &ansB : &hook));
+        else if (pb == 2) src = &var3;
+        else if (phrase >= 2 && pb == 1 && v > 0.3f) src = &ansA;
+        const Cell* fill = nullptr;
+        if (turnaround) fill = &bigFills[(size_t) ((answerPhrase || (last && P.bars > 4)) ? F2b : F2)];
+        else if (answer) fill = &fills[(size_t) (answerPhrase ? F1b : F1)];
+        for (auto& n : *src) if (! (fill && n.step >= 12)) raw.push_back ({ bar * 16 + n.step, n.len, n.r, false });
+        if (fill) for (auto& n : *fill) raw.push_back ({ bar * 16 + 12 + n.s, n.len, n.r, true });
+    }
+    std::sort (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step < b.step; });
+    raw.erase (std::unique (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.step == b.step; }), raw.end());
 
     int shift[4]; barRoots (P, shift);
     const int nb = std::max (1, P.bars);

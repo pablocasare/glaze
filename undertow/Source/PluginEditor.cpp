@@ -527,7 +527,8 @@ Content::Content (UndertowProcessor& p, const Fonts& f) : proc (p), fonts (f), s
         combos.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (st, id, c));
     };
     combo (key, "key"); combo (scale, "scale"); combo (octave, "octave"); combo (bars, "bars"); combo (chords, "chords"); combo (sound, "sound");
-    for (auto* b : { &generate, &mutate, &undo, &redo, &play, &kick, &lockR, &lockP, &exportB, &clear }) addAndMakeVisible (*b);
+    for (auto* b : { &generate, &mutate, &undo, &redo, &play, &kick, &lockR, &lockP, &exportB, &clear, &evolve }) addAndMakeVisible (*b);
+    btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "evolve", evolve));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "kick", kick));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "lockRhythm", lockR));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "lockPitch", lockP));
@@ -585,7 +586,7 @@ void Content::paint (juce::Graphics& g)
     g.setColour (col::ink); g.setFont (fonts.n (17));
     g.drawText (juce::String (proc.bpm.load(), 1), 968, 90, 80, 24, juce::Justification::left);
     g.setColour (col::dim); g.setFont (fonts.caps (8.5f)); g.drawText (proc.uiBeat.load() >= 0 ? "PLAYING" : "HOST SYNC", 1030, 97, 70, 12, juce::Justification::left);
-    module (g, { 14, 128, 228, 552 }, "STYLE");
+    module (g, { 14, 128, 228, 552 }, "STYLE  (GROOVE TYPE)");
     module (g, { 252, 128, 662, 552 }, nullptr);
     module (g, { 924, 128, 242, 172 }, "SHAPE");
     module (g, { 924, 306, 242, 172 }, "FEEL");
@@ -595,6 +596,14 @@ void Content::paint (juce::Graphics& g)
     g.drawFittedText (ut::styleBlurb ((int) proc.p ("style")), 28, 650, 200, 22, juce::Justification::centredLeft, 1);
     g.setColour (col::label); g.setFont (fonts.caps (9));
     g.drawText ("LOCK", 600, 722, 40, 12, juce::Justification::left);
+    // what each control does, in plain words
+    g.setColour (col::dim); g.setFont (fonts.m (10.5f));
+    g.drawText ("brand-new bassline", 28, 754, 220, 12, juce::Justification::centred);
+    g.drawText ("same groove, new notes", 240, 748, 132, 12, juce::Justification::centred);
+    g.drawText ("keep these when you generate", 636, 748, 190, 12, juce::Justification::centred);
+    g.drawText ("new take every loop", 566, 120, 150, 12, juce::Justification::left);
+    g.drawText ("presets: click the name or use the arrows", 390, 51, 400, 12, juce::Justification::centred);
+    g.setColour (col::label); g.setFont (fonts.caps (9)); g.drawText ("PLAYBACK", 567, 76, 120, 12, juce::Justification::left);
 }
 
 void Content::resized()
@@ -604,6 +613,7 @@ void Content::resized()
     bars.setBounds (290, 90, 82, 28); chords.setBounds (380, 90, 170, 28);
     play.setBounds (912, 88, 44, 32);
     kick.setBounds (1094, 88, 70, 32);
+    evolve.setBounds (566, 88, 110, 30);
     styles.setBounds (22, 152, 212, 492);
     roll.setBounds (266, 136, 634, 536);
     const int kx[] = { 936, 1048 };
