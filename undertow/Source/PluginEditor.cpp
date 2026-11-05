@@ -264,7 +264,7 @@ void Roll::paint (juce::Graphics& g)
     g.setColour (col::dim); g.setFont (f.n (11));
     int ghosts = 0; for (auto& n : pat) ghosts += n.ghost ? 1 : 0;
     g.drawText (juce::String ((int) pat.size()) + " notes  " + DOT + "  " + juce::String (ghosts) + " ghost  " + DOT + "  " + ut::keyNames[key] + " " + ut::scaleName (sc)
-                    + "  " + DOT + "  " + juce::String (ut::styleName ((int) p.p ("style"))).toLowerCase(), 86, 2, 460, 18, juce::Justification::left);
+                    + "  " + DOT + "  " + juce::String (ut::styleName ((int) p.p ("style"))).toLowerCase(), 86, 2, 250, 18, juce::Justification::left);
     if (p.isEdited())
     {
         auto e = juce::Rectangle<float> (b.getRight() - 64, 2, 64, 18);
@@ -479,8 +479,9 @@ void DragTile::paint (juce::Graphics& g)
     auto ft = f.s (11); ft.setExtraKerningFactor (0.1f);
     g.setColour (col::ink); g.setFont (ft); g.drawText ("DRAG MIDI", (int) px + 38, (int) r.getY() + 7, 100, 14, juce::Justification::left);
     g.setColour (col::dim); g.setFont (f.n (9.5f));
-    g.drawText (juce::String (p.bars()) + " bar" + (p.bars() > 1 ? "s " : " ") + DOT + " " + juce::String (juce::roundToInt (p.bpm.load())) + " bpm",
-                (int) px + 38, (int) r.getY() + 22, 100, 13, juce::Justification::left);
+    const int tk = p.printTakes(), tb = p.bars() * tk;
+    g.drawText (juce::String (tb) + " bar" + (tb > 1 ? "s" : "") + (tk > 1 ? " " + DOT + " " + juce::String (tk) + " takes" : " " + DOT + " " + juce::String (juce::roundToInt (p.bpm.load())) + " bpm"),
+                (int) px + 38, (int) r.getY() + 22, 116, 13, juce::Justification::left);
 }
 void DragTile::mouseDrag (const juce::MouseEvent& e)
 {
@@ -488,8 +489,37 @@ void DragTile::mouseDrag (const juce::MouseEvent& e)
     dragging = true;
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Undertow"); dir.createDirectory();
     auto f2 = dir.getChildFile (p.suggestedFileName());
-    if (p.writeMidi (f2)) juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f2.getFullPathName() }, false, this);
+    if (p.writeMidi (f2, p.printTakes())) juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f2.getFullPathName() }, false, this);
 }
+void SlotBar::paint (juce::Graphics& g)
+{
+    g.setColour (col::label); g.setFont (f.caps (9)); g.drawText ("IDEAS", 0, 0, LW - 4, getHeight(), juce::Justification::right);
+    const float w = (getWidth() - LW) / (float) UndertowProcessor::NumSlots;
+    for (int i = 0; i < UndertowProcessor::NumSlots; ++i)
+    {
+        auto r = juce::Rectangle<float> (LW + i * w + 2, 1, w - 4, (float) getHeight() - 2);
+        const bool used = p.slotUsed (i), cur = p.currentSlot == i;
+        g.setColour (cur ? col::sigDeep : (used ? col::moduleHi : col::screen)); g.fillRoundedRectangle (r, 3);
+        g.setColour (cur ? col::sig : (i == hover ? col::label : col::edge)); g.drawRoundedRectangle (r.reduced (0.5f), 3, 1);
+        g.setColour (cur ? col::sig : (used ? col::ink : col::faint)); g.setFont (f.n (10.5f));
+        g.drawText (used ? juce::String (i + 1) : "+", r, juce::Justification::centred);
+    }
+}
+void SlotBar::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.x < LW) return;
+    const int i = slotAt (e.x);
+    if (e.mods.isPopupMenu() || (p.slotUsed (i) && p.currentSlot == i && e.mods.isShiftDown()))
+    {
+        if (! p.slotUsed (i)) return;
+        juce::PopupMenu m; m.addItem (1, "Save current idea here"); m.addItem (2, "Clear slot " + juce::String (i + 1));
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [this, i] (int r) { if (r == 1) p.storeSlot (i); if (r == 2) p.clearSlot (i); repaint(); });
+        return;
+    }
+    if (p.slotUsed (i)) p.recallSlot (i); else p.storeSlot (i);
+    repaint();
+}
+
 void Scope::paint (juce::Graphics& g)
 {
     auto sc = getLocalBounds().toFloat();
@@ -527,7 +557,9 @@ Content::Content (UndertowProcessor& p, const Fonts& f) : proc (p), fonts (f), s
         combos.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (st, id, c));
     };
     combo (key, "key"); combo (scale, "scale"); combo (octave, "octave"); combo (bars, "bars"); combo (chords, "chords"); combo (sound, "sound");
-    for (auto* b : { &generate, &mutate, &undo, &redo, &play, &kick, &lockR, &lockP, &exportB, &clear, &evolve }) addAndMakeVisible (*b);
+    for (auto* b : { &generate, &mutate, &undo, &redo, &play, &kick, &lockR, &lockP, &exportB, &clear, &evolve, &keyIn }) addAndMakeVisible (*b);
+    addAndMakeVisible (slotBar);
+    btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "keyIn", keyIn));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "evolve", evolve));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "kick", kick));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "lockRhythm", lockR));
@@ -541,7 +573,7 @@ Content::Content (UndertowProcessor& p, const Fonts& f) : proc (p), fonts (f), s
     exportB.onClick = [this] {
         chooser = std::make_unique<juce::FileChooser> ("Export MIDI", juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile (proc.suggestedFileName()), "*.mid");
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this] (const juce::FileChooser& fc) { auto f2 = fc.getResult(); if (f2 != juce::File()) proc.writeMidi (f2.withFileExtension ("mid")); });
+                              [this] (const juce::FileChooser& fc) { auto f2 = fc.getResult(); if (f2 != juce::File()) proc.writeMidi (f2.withFileExtension ("mid"), proc.printTakes()); });
     };
     setSize (W, H);
 }
@@ -602,6 +634,7 @@ void Content::paint (juce::Graphics& g)
     g.drawText ("same groove, new notes", 240, 748, 132, 12, juce::Justification::centred);
     g.drawText ("keep these when you generate", 636, 748, 190, 12, juce::Justification::centred);
     g.drawText ("new take every loop", 566, 120, 150, 12, juce::Justification::left);
+    g.drawText ("play a note to change key", 686, 120, 200, 12, juce::Justification::left);
     g.drawText ("presets: click the name or use the arrows", 390, 51, 400, 12, juce::Justification::centred);
     g.setColour (col::label); g.setFont (fonts.caps (9)); g.drawText ("PLAYBACK", 567, 76, 120, 12, juce::Justification::left);
 }
@@ -613,7 +646,8 @@ void Content::resized()
     bars.setBounds (290, 90, 82, 28); chords.setBounds (380, 90, 170, 28);
     play.setBounds (912, 88, 44, 32);
     kick.setBounds (1094, 88, 70, 32);
-    evolve.setBounds (566, 88, 110, 30);
+    evolve.setBounds (566, 88, 110, 30); keyIn.setBounds (686, 88, 116, 30);
+    slotBar.setBounds (578, 139, 250, 20);
     styles.setBounds (22, 152, 212, 492);
     roll.setBounds (266, 136, 634, 536);
     const int kx[] = { 936, 1048 };
@@ -634,7 +668,7 @@ void Content::tick()
     play.setToggleState (proc.internalPlay.load() || proc.uiBeat.load() >= 0, juce::dontSendNotification);
     undo.setEnabled (proc.canUndo()); redo.setEnabled (proc.canRedo());
     static int n = 0;
-    if (++n % 6 == 0) { styles.repaint(); preset.repaint(); drag.repaint(); repaint (900, 70, 280, 50); repaint (20, 640, 220, 40); }
+    if (++n % 6 == 0) { styles.repaint(); preset.repaint(); drag.repaint(); slotBar.repaint(); repaint (900, 70, 280, 50); repaint (20, 640, 220, 40); }
     scope.repaint();
 }
 

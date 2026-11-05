@@ -15,7 +15,8 @@ inline const juce::StringArray soundNames { "Sub", "Rubber", "Reese", "Organ", "
 struct Voice
 {
     double sr = 44100;
-    double phase = 0, phase2 = 0, subPhase = 0;
+    double phase = 0, phase2 = 0, phase3 = 0, subPhase = 0, lfo = 0;
+    float pitchEnv = 0;
     float freq = 55, target = 55, glideCoef = 1;
     float amp = 0, ampTarget = 0, fenv = 0;
     bool gate = false; int note = -1; float vel = 1;
@@ -88,7 +89,13 @@ public:
     int scale() const { return (int) p ("scale"); }
     int bars() const { return ut::barVals[(int) p ("bars")]; }
     float swing() const { return p ("swing"); }
-    bool writeMidi (const juce::File& f) const;
+    bool writeMidi (const juce::File& f, int takes = 1) const;
+    int printTakes() const; // how many takes DRAG/EXPORT writes (EVOLVE on: several takes back to back)
+    // idea slots: save up to 8 basslines (pattern + settings) and flip between them
+    static constexpr int NumSlots = 8;
+    bool slotUsed (int i) const { return slots[(size_t) i].used; }
+    void storeSlot (int i); void recallSlot (int i); void clearSlot (int i);
+    int currentSlot = -1;
     juce::String suggestedFileName() const;
 
     // transport
@@ -129,4 +136,7 @@ private:
     float duck = 1;
     double hostOffset = 0, lastHostEnd = -1; long long lastCycle = -1;
     std::atomic<bool> wrapped { false };
+    std::atomic<int> pendingKey { -1 };
+    struct Slot { bool used = false; Seeds seeds; std::vector<ut::Note> pat; bool edited = false; std::vector<std::pair<juce::String, float>> params; };
+    std::array<Slot, NumSlots> slots;
 };

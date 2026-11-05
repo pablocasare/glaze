@@ -92,6 +92,36 @@ int main (int argc, char** argv)
         const bool changed = key (p1, false) != key (p2, false), hookKept = key (p1, true) == key (p2, true);
         std::printf ("%s evolve changes the take\n%s evolve keeps the hook\n", changed ? "PASS" : "FAIL", hookKept ? "PASS" : "FAIL"); failures += ! changed + ! hookKept;
     }
+    // idea slots: save, generate something else, recall brings back the exact pattern + settings, survives save/load
+    {
+        UndertowProcessor a; a.regenerate(); setP (a, "style", 3.f); a.pump(); a.generateNew(); auto keep = a.getPattern();
+        a.storeSlot (2); a.generateNew(); setP (a, "style", 7.f); a.pump();
+        a.recallSlot (2); a.pump(); auto back = a.getPattern();
+        bool same = keep.size() == back.size(); for (size_t k = 0; same && k < keep.size(); ++k) same = keep[k].step == back[k].step && keep[k].deg == back[k].deg;
+        const bool styleBack = (int) a.p ("style") == 3;
+        juce::MemoryBlock mb; a.getStateInformation (mb); UndertowProcessor b; b.setStateInformation (mb.getData(), (int) mb.getSize());
+        b.generateNew(); b.recallSlot (2); b.pump(); auto again = b.getPattern();
+        bool st = b.slotUsed (2) && again.size() == keep.size(); for (size_t k = 0; st && k < keep.size(); ++k) st = keep[k].step == again[k].step && keep[k].deg == again[k].deg;
+        std::printf ("%s slot recall\n%s slot restores settings\n%s slots saved with project\n", same ? "PASS" : "FAIL", styleBack ? "PASS" : "FAIL", st ? "PASS" : "FAIL"); failures += ! same + ! styleBack + ! st;
+    }
+    // MIDI key in: playing a G changes the key to G
+    {
+        UndertowProcessor a; Head h; a.setPlayHead (&h); a.prepareToPlay (48000, 256); a.regenerate();
+        juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 55, (juce::uint8) 100), 0);
+        a.processBlock (buf, m); a.pump();
+        const bool ok = (int) a.p ("key") == 7;
+        std::printf ("%s midi note sets key\n", ok ? "PASS" : "FAIL"); failures += ! ok;
+    }
+    // print takes: with EVOLVE on, DRAG writes 4 different takes back to back
+    {
+        UndertowProcessor a; setP (a, "bars", 2.f); setP (a, "evolve", 1.f); a.pump(); a.regenerate();
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ut_takes.mid");
+        const int tk = a.printTakes(); a.writeMidi (f, tk);
+        juce::MidiFile mf; juce::FileInputStream in (f); mf.readFrom (in); double endT = 0; int ons = 0;
+        for (int t = 0; t < mf.getNumTracks(); ++t) for (auto* ev : *mf.getTrack (t)) if (ev->message.isNoteOn()) { ++ons; endT = std::max (endT, ev->message.getTimeStamp()); }
+        const bool ok = tk == 4 && endT > 12 * 4 * 960 && ons > (int) a.getPattern().size() * 3;
+        std::printf ("%s print %d takes (%d notes, ends beat %.0f)\n", ok ? "PASS" : "FAIL", tk, ons, endT / 960); failures += ! ok;
+    }
     // GENERATE gives a different bassline every press
     {
         UndertowProcessor a; std::set<std::string> seen;

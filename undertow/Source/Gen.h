@@ -154,7 +154,7 @@ inline void barRoots (const Params& P, int* shift)
     if (P.chords == ChordAuto)
     {
         std::mt19937 hr (P.pitchSeed * 2246822519u + 13u);
-        if (std::uniform_real_distribution<float> (0.f, 1.f) (hr) < (P.movement - 0.45f) * 1.6f)
+        if (std::uniform_real_distribution<float> (0.f, 1.f) (hr) < (P.movement - 0.2f) * 1.4f)
         {
             static const int prog[] = { ChordI_VI, ChordI_VII, ChordI_iv, ChordI_VI_VII };
             const int c = prog[hr() % 4];

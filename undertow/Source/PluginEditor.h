@@ -114,6 +114,17 @@ struct DragTile : juce::Component
     void mouseUp (const juce::MouseEvent&) override { dragging = false; }
 };
 
+struct SlotBar : juce::Component
+{
+    UndertowProcessor& p; const Fonts& f; int hover = -1; static constexpr int LW = 46;
+    int slotAt (int x) const { return juce::jlimit (0, UndertowProcessor::NumSlots - 1, (int) ((x - LW) / ((getWidth() - LW) / (float) UndertowProcessor::NumSlots))); }
+    SlotBar (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) {}
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent& e) override { hover = e.x < LW ? -1 : slotAt (e.x); repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
+};
+
 struct Scope : juce::Component
 {
     UndertowProcessor& p; const Fonts& f;
@@ -127,13 +138,13 @@ struct Content : juce::Component
     static constexpr int W = 1180, H = 780;
     UndertowProcessor& proc; const Fonts& fonts;
     juce::Image grain;
-    StyleList styles; PresetBar preset; Roll roll; DragTile drag; Scope scope;
+    StyleList styles; PresetBar preset; Roll roll; DragTile drag; Scope scope; SlotBar slotBar { proc, fonts };
     std::vector<std::unique_ptr<Knob>> knobs;
     juce::ComboBox key, scale, octave, bars, chords, sound;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> combos;
     Btn generate { fonts, "GENERATE", Btn::Primary }, mutate { fonts, "VARY" }, undo { fonts, "UNDO" }, redo { fonts, "REDO" },
         play { fonts, "", Btn::Plain }, kick { fonts, "KICK", Btn::Toggle }, lockR { fonts, "RHYTHM", Btn::Toggle }, lockP { fonts, "PITCH", Btn::Toggle },
-        exportB { fonts, "EXPORT" }, clear { fonts, "CLEAR" }, evolve { fonts, "EVOLVE", Btn::Toggle };
+        exportB { fonts, "EXPORT" }, clear { fonts, "CLEAR" }, evolve { fonts, "EVOLVE", Btn::Toggle }, keyIn { fonts, "MIDI KEY", Btn::Toggle };
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> btns;
     std::unique_ptr<juce::FileChooser> chooser;
     Content (UndertowProcessor&, const Fonts&);

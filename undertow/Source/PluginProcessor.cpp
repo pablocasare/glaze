@@ -16,7 +16,7 @@ void Voice::noteOn (int n, float v, bool slide, float glideMs)
     target = 440.f * std::pow (2.f, (n - 69) / 12.f);
     const bool legato = gate && slide;
     if (legato) glideCoef = 1.f - std::exp (-1.f / (float) (std::max (5.f, glideMs) * 0.001f * sr));
-    else { freq = target; glideCoef = 1.f; fenv = 1.f; }
+    else { freq = target; glideCoef = 1.f; fenv = 1.f; pitchEnv = 1.f; }
     note = n; vel = v; gate = true;
     // no hard amp reset on retrigger: the 22 ms release + 1.5 ms attack handle it without clicks
 }
@@ -24,27 +24,34 @@ void Voice::noteOn (int n, float v, bool slide, float glideMs)
 float Voice::render (int sound, float cutOff, float drive)
 {
     // per-sound recipe: sub, saw, square, saw2 detune, base cutoff (Hz), reso, env amount (oct), env decay (s), drive
-    struct R { float sub, saw, sq, det, cut, res, env, dec, drv; };
+    // pe: pitch drop at the start of each note in semitones (the 'boing' of a rubber bass)
+    struct R { float sub, saw, sq, det, cut, res, env, dec, drv, pe; };
     static const R rec[] = {
-        { 1.0f, 0.12f, 0.0f, 0.0f, 260, 0.2f, 1.2f, 0.10f, 0.15f },  // Sub
-        { 0.7f, 0.0f, 0.55f, 0.0f, 380, 0.45f, 3.2f, 0.09f, 0.35f }, // Rubber
-        { 0.6f, 0.55f, 0.0f, 0.12f, 650, 0.25f, 1.6f, 0.25f, 0.6f }, // Reese
-        { 0.9f, 0.0f, 0.0f, 0.0f, 2200, 0.1f, 0.0f, 0.1f, 0.25f },   // Organ (additive below)
-        { 0.35f, 0.85f, 0.0f, 0.0f, 300, 0.85f, 4.2f, 0.16f, 0.5f }, // Acid
-        { 0.6f, 0.4f, 0.4f, 0.04f, 520, 0.5f, 2.5f, 0.14f, 0.9f } }; // Growl
+        { 1.0f, 0.12f, 0.0f, 0.0f, 260, 0.2f, 1.2f, 0.10f, 0.15f, 0.0f },  // Sub
+        { 0.7f, 0.0f, 0.55f, 0.0f, 380, 0.45f, 3.2f, 0.09f, 0.35f, 5.0f }, // Rubber
+        { 0.6f, 0.55f, 0.0f, 0.12f, 650, 0.25f, 1.6f, 0.25f, 0.6f, 0.0f }, // Reese (3 drifting saws)
+        { 0.9f, 0.0f, 0.0f, 0.0f, 2200, 0.1f, 0.0f, 0.1f, 0.25f, 0.0f },   // Organ (additive below)
+        { 0.35f, 0.85f, 0.0f, 0.0f, 300, 0.85f, 4.2f, 0.16f, 0.5f, 0.0f }, // Acid
+        { 0.6f, 0.4f, 0.4f, 0.04f, 520, 0.5f, 2.5f, 0.14f, 0.9f, 2.0f } }; // Growl
     const R& r = rec[juce::jlimit (0, 5, sound)];
 
     freq += (target - freq) * glideCoef;
-    const double dt = freq / sr;
+    pitchEnv *= std::exp (-1.f / (0.028f * (float) sr));
+    const double dt = freq * (r.pe > 0 ? std::pow (2.0, r.pe * pitchEnv / 12.0) : 1.0) / sr;
+    lfo += 0.13 / sr; if (lfo >= 1) lfo -= 1;
+    const double drift = 1.0 + 0.35 * std::sin (juce::MathConstants<double>::twoPi * lfo); // slow detune drift
     phase += dt; if (phase >= 1) phase -= 1;
-    phase2 += dt * (1.0 + r.det * 0.06); if (phase2 >= 1) phase2 -= 1;
+    phase2 += dt * (1.0 + r.det * 0.06 * drift); if (phase2 >= 1) phase2 -= 1;
+    phase3 += dt * (1.0 - r.det * 0.045 * drift); if (phase3 >= 1) phase3 -= 1;
     subPhase += dt; if (subPhase >= 1) subPhase -= 1;
 
     float x = r.sub * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase);
+    if (sound == 0) x += 0.12f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2);
     if (r.saw > 0)
     {
         float s = (float) (2 * phase - 1) - polyBlep (phase, dt);
-        if (r.det > 0) s = 0.5f * (s + (float) (2 * phase2 - 1) - polyBlep (phase2, dt * (1.0 + r.det * 0.06)));
+        if (r.det > 0) s = 0.4f * (s + (float) (2 * phase2 - 1) - polyBlep (phase2, dt * (1.0 + r.det * 0.06)))
+                         + (sound == 2 ? 0.35f * ((float) (2 * phase3 - 1) - polyBlep (phase3, dt)) : 0.f);
         x += r.saw * s;
     }
     if (r.sq > 0)
@@ -126,6 +133,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "lockRhythm", 1 }, "Lock Rhythm", false));
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "lockPitch", 1 }, "Lock Pitch", false));
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "evolve", 1 }, "Evolve", true));
+    v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "keyIn", 1 }, "MIDI Key In", true));
     v.push_back (std::make_unique<AudioParameterBool> (ParameterID { "mute", 1 }, "Mute Sound (MIDI only)", false));
     return { v.begin(), v.end() };
 }
@@ -190,6 +198,49 @@ void UndertowProcessor::applyPreset (int index)
     currentPreset = index; presetModified = false;
     edited = false; dirty = true;
 }
+
+static juce::ValueTree notesToTree (const std::vector<ut::Note>& v, const char* name)
+{
+    juce::ValueTree pt (name);
+    for (auto& n : v)
+    {
+        juce::ValueTree nt ("N");
+        nt.setProperty ("s", n.step, nullptr); nt.setProperty ("l", n.len, nullptr); nt.setProperty ("d", n.deg, nullptr);
+        nt.setProperty ("v", n.vel, nullptr); nt.setProperty ("sl", n.slide, nullptr); nt.setProperty ("g", n.ghost, nullptr);
+        pt.appendChild (nt, nullptr);
+    }
+    return pt;
+}
+static std::vector<ut::Note> treeToNotes (const juce::ValueTree& pt)
+{
+    std::vector<ut::Note> notes;
+    for (auto nt : pt)
+    {
+        ut::Note n; n.step = nt.getProperty ("s"); n.len = nt.getProperty ("l"); n.deg = nt.getProperty ("d");
+        n.vel = nt.getProperty ("v"); n.slide = nt.getProperty ("sl"); n.ghost = nt.getProperty ("g"); notes.push_back (n);
+    }
+    return notes;
+}
+static bool slotParam (const juce::String& id) { return id != "evolve" && id != "kick" && id != "mute" && id != "volume" && id != "lockRhythm" && id != "lockPitch" && id != "keyIn"; }
+void UndertowProcessor::storeSlot (int i)
+{
+    auto& s = slots[(size_t) i]; s.used = true; s.seeds = seeds; s.pat = getPattern(); s.edited = edited; s.params.clear();
+    for (auto* prm : getParameters()) if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (prm)) if (slotParam (r->getParameterID())) s.params.push_back ({ r->getParameterID(), r->getValue() });
+    currentSlot = i;
+}
+void UndertowProcessor::recallSlot (int i)
+{
+    const auto& s = slots[(size_t) i]; if (! s.used) return;
+    pushHistory();
+    applyingPreset = true;
+    for (auto& [id, v] : s.params) if (auto* q = apvts.getParameter (id)) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
+    applyingPreset = false;
+    dirty = false; renderDirty = false;
+    seeds = s.seeds; edited = s.edited;
+    { const juce::SpinLock::ScopedLockType l (patLock); pattern = s.pat; rebuildEvents(); }
+    patternVersion++; currentSlot = i;
+}
+void UndertowProcessor::clearSlot (int i) { slots[(size_t) i] = {}; if (currentSlot == i) currentSlot = -1; }
 
 UndertowProcessor::Snapshot UndertowProcessor::snap() const { Snapshot s; s.seeds = seeds; s.pat = getPattern(); s.edited = edited; return s; }
 void UndertowProcessor::restore (const Snapshot& s)
@@ -266,6 +317,8 @@ void UndertowProcessor::rebuildEvents()
 void UndertowProcessor::timerCallback()
 {
     // EVOLVE: every time the pattern comes around, play a new take on it (same hook, new variations + fills)
+    const int pk = pendingKey.exchange (-1);
+    if (pk >= 0 && pk != (int) p ("key")) if (auto* q = apvts.getParameter ("key")) { q->beginChangeGesture(); q->setValueNotifyingHost (q->convertTo0to1 ((float) pk)); q->endChangeGesture(); }
     if (wrapped.exchange (false) && p ("evolve") > 0.5f && ! edited && bars() > 1) { seeds.take++; dirty = true; }
     if (dirty.exchange (false)) { renderDirty = false; regenerate(); }
     else if (renderDirty.exchange (false)) { { const juce::SpinLock::ScopedLockType l (patLock); rebuildEvents(); } patternVersion++; }
@@ -302,6 +355,7 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
     juce::ScopedNoDenormals nd;
     const int n = buf.getNumSamples();
     buf.clear();
+    if (p ("keyIn") > 0.5f) for (const auto md : midi) if (md.getMessage().isNoteOn()) pendingKey = md.getMessage().getNoteNumber() % 12;
     midi.clear();
 
     double hostBpm = 128; bool hostPlaying = false; double ppq = 0;
@@ -407,14 +461,30 @@ juce::String UndertowProcessor::suggestedFileName() const
          + juce::String (scaleName (scale())).replace (" ", "").replace (".", "") + "_" + juce::String (juce::roundToInt (bpm.load())) + "bpm.mid";
 }
 
-bool UndertowProcessor::writeMidi (const juce::File& f) const
+int UndertowProcessor::printTakes() const
+{
+    if (p ("evolve") < 0.5f || edited || bars() < 2) return 1;
+    return juce::jlimit (1, 4, 32 / bars());
+}
+
+bool UndertowProcessor::writeMidi (const juce::File& f, int takes) const
 {
     const int tpq = 960; juce::MidiMessageSequence seq;
     seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) (60000000.0 / bpm.load())), 0);
     seq.addEvent (juce::MidiMessage::textMetaEvent (3, "Undertow Bass"), 0);
     const float sw = swing(); const int root = rootMidi(), sc = scale();
     auto beatOf = [&] (int step) { return step * 0.25 + ((step % 2) ? (sw - 0.5) * 0.5 : 0.0); };
+    // takes > 1: the current take, then the next EVOLVE takes after it, back to back
     auto pat = getPattern();
+    if (takes > 1)
+    {
+        auto P = currentParams();
+        for (int t = 1; t < takes; ++t)
+        {
+            P.take = seeds.take + (uint32_t) t;
+            for (auto nn : generate (P)) { nn.step += t * bars() * 16; pat.push_back (nn); }
+        }
+    }
     for (size_t i = 0; i < pat.size(); ++i)
     {
         const auto& nn = pat[i]; const int m = juce::jlimit (0, 127, root + degToSemi (nn.deg, sc));
@@ -451,6 +521,19 @@ void UndertowProcessor::getStateInformation (juce::MemoryBlock& mb)
         }
         st.appendChild (pt, nullptr);
     }
+    st.removeChild (st.getChildWithName ("SLOTS"), nullptr);
+    juce::ValueTree sl ("SLOTS"); sl.setProperty ("current", currentSlot, nullptr);
+    for (int i = 0; i < NumSlots; ++i)
+    {
+        const auto& s = slots[(size_t) i]; if (! s.used) continue;
+        auto t = notesToTree (s.pat, "SLOT"); t.setProperty ("i", i, nullptr);
+        t.setProperty ("r", (juce::int64) s.seeds.r, nullptr); t.setProperty ("p", (juce::int64) s.seeds.p, nullptr); t.setProperty ("m", (juce::int64) s.seeds.m, nullptr);
+        t.setProperty ("mu", s.seeds.muts, nullptr); t.setProperty ("tk", (juce::int64) s.seeds.take, nullptr); t.setProperty ("ed", s.edited, nullptr);
+        juce::ValueTree ps ("P"); for (auto& [id, v] : s.params) ps.setProperty (id, v, nullptr);
+        t.setProperty ("params", ps.toXmlString(), nullptr);
+        sl.appendChild (t, nullptr);
+    }
+    st.appendChild (sl, nullptr);
     if (auto xml = st.createXml()) copyXmlToBinary (*xml, mb);
 }
 void UndertowProcessor::setStateInformation (const void* d, int s)
@@ -471,6 +554,18 @@ void UndertowProcessor::setStateInformation (const void* d, int s)
         }
         const bool wasEdited = st.getProperty ("edited", false) && ! notes.empty();
         st.removeChild (pt, nullptr);
+        auto sl = st.getChildWithName ("SLOTS");
+        for (auto& x : slots) x = {};
+        for (auto t : sl)
+        {
+            const int i = t.getProperty ("i", -1); if (i < 0 || i >= NumSlots) continue;
+            auto& x = slots[(size_t) i]; x.used = true; x.pat = treeToNotes (t);
+            x.seeds.r = (uint32_t) (juce::int64) t.getProperty ("r"); x.seeds.p = (uint32_t) (juce::int64) t.getProperty ("p"); x.seeds.m = (uint32_t) (juce::int64) t.getProperty ("m");
+            x.seeds.muts = t.getProperty ("mu"); x.seeds.take = (uint32_t) (juce::int64) t.getProperty ("tk"); x.edited = t.getProperty ("ed");
+            if (auto px = juce::parseXML (t.getProperty ("params").toString())) { auto ps = juce::ValueTree::fromXml (*px); for (int k = 0; k < ps.getNumProperties(); ++k) x.params.push_back ({ ps.getPropertyName (k).toString(), (float) ps.getProperty (ps.getPropertyName (k)) }); }
+        }
+        currentSlot = sl.getProperty ("current", -1);
+        st.removeChild (sl, nullptr);
         applyingPreset = true; apvts.replaceState (st); applyingPreset = false;
         edited = false;
         regenerate();
