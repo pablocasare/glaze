@@ -23,6 +23,7 @@ struct Note
     int vel = 100;
     bool slide = false; // glide into this note
     bool ghost = false;
+    int add = 0;        // extra semitones (chord transpose that the scale itself can't spell)
 };
 
 enum Style { Rolling, Bouncy, Offbeat, TwoStep, Minimal, Driving, Broken, Acid, SpeedGarage, Afro, DeepTech, Bassline, NumStyles };
@@ -93,7 +94,7 @@ inline int styleBpm (int s)
 inline bool isKickStep (int style, int step16)
 {
     step16 &= 15;
-    if (style == TwoStep) return step16 == 0 || step16 == 7 || step16 == 8 || step16 == 15;
+    if (style == TwoStep) return step16 == 0 || step16 == 10; // 1 and 11 on a 1-count; the bass answers, it doesn't double them
     if (style == Broken) return step16 == 0 || step16 == 6 || step16 == 9 || step16 == 13;
     return (step16 & 3) == 0;
 }
@@ -113,6 +114,26 @@ inline double noteOffBeat (int step, int len, float swing, float gate, int style
     const float gk = 0.28f + 0.70f * std::max (0.f, std::min (1.f, gate));
     const double full = noteOnBeat (step + std::max (1, len), swing, style) - on;
     return on + std::max (0.05, full * (double) gk - 0.008);
+}
+
+// Shorten a hold so it is silent for `gapMs` before every kick the note would otherwise cover.
+// Used by the synth and by MIDI export. gapMs <= 0 leaves the note alone.
+inline double applyKickGap (int step, int len, float swing, float gate, int style, bool legato, float bpm, float gapMs)
+{
+    double off = noteOffBeat (step, len, swing, gate, style, legato);
+    if (gapMs <= 0.01f || bpm < 1.f) return off;
+    const double on = noteOnBeat (step, swing, style);
+    const double gapBeats = (double) gapMs / 1000.0 * ((double) bpm / 60.0);
+    const int last = step + std::max (1, len) + 4;
+    for (int s = step + 1; s <= last; ++s)
+    {
+        if (! isKickStep (style, s)) continue;
+        const double kb = s * 0.25;
+        if (kb > on + 1.0e-4 && kb < off + 1.0e-6)
+            off = std::min (off, kb - gapBeats);
+    }
+    if (off < on + 0.01) off = on + 0.01;
+    return off;
 }
 
 enum Scale { Minor, Dorian, Phrygian, HarmMinor, Major, MinorPent, Mixolydian, NumScales };
@@ -155,7 +176,7 @@ inline const int* chordRoots (int c)
 
 struct Params
 {
-    int style = Rolling, bars = 2, chords = ChordAuto;
+    int style = Rolling, bars = 2, chords = ChordAuto, scale = 0;
     float density = 0.6f, movement = 0.45f, variation = 0.3f, gate = 0.8f, ghosts = 0.3f, accent = 0.5f;
     uint32_t rhythmSeed = 1, pitchSeed = 1, mutateSeed = 0, take = 0;
     int mutations = 0;
@@ -190,7 +211,7 @@ inline const std::vector<Cell>& beatCells (int style)
 }
 inline const std::vector<Cell>& barTemplates (int style)
 {
-    static const std::vector<Cell> twoStep { { { 0, 4, 'R' }, { 6, 2, '5' }, { 8, 4, 'O' }, { 14, 2, '7' } },
+    static const std::vector<Cell> twoStep { { { 2, 3, 'R' }, { 6, 2, 'O' }, { 12, 2, '5' }, { 14, 2, '7' } },
                                               { { 0, 3, 'R' }, { 4, 2, 'O' }, { 8, 3, 'R' }, { 12, 2, '5' }, { 14, 2, '7' } } };
     static const std::vector<Cell> minimal { { { 2, 2, 'R' }, { 6, 2, 'O' }, { 10, 2, 'R' } }, { { 2, 3, 'R' }, { 10, 3, 'R' }, { 14, 1, '7' } } };
     static const std::vector<Cell> broken { { { 2, 2, 'R' }, { 4, 2, 'O' }, { 8, 1, 'R' }, { 11, 2, '5' }, { 14, 2, 'R' } } };
@@ -209,6 +230,8 @@ inline uint32_t mix32 (uint32_t x)
     x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x;
 }
 inline float hash01 (uint32_t x) { return (mix32 (x) & 0xffffff) / float (0x1000000); }
+// 24-bit fraction. Same on libc++, libstdc++ and MSVC. std::uniform_real_distribution is not.
+inline float u01 (std::mt19937& g) { return (float) (g() >> 8) * (1.0f / 16777216.0f); }
 
 inline void barRoots (const Params& P, int* shift)
 {
@@ -219,7 +242,7 @@ inline void barRoots (const Params& P, int* shift)
         std::mt19937 hr (P.pitchSeed * 2246822519u + 13u);
         float chance = (P.movement - 0.15f) * 1.15f;
         if (P.style == Minimal || P.style == DeepTech) chance *= 0.35f; // hypnotic styles stay home unless Movement is high
-        if (std::uniform_real_distribution<float> (0.f, 1.f) (hr) < chance)
+        if (u01 (hr) < chance)
         {
             static const int prog[] = { ChordI_VI, ChordI_VII, ChordI_iv, ChordI_VI_VII };
             const int c = prog[hr() % 4];
@@ -249,23 +272,128 @@ inline void add (Bar& b, int step, int len, char r)
     for (auto& n : b) if (n.step == step) return;
     b.push_back ({ step, std::min (len, 16 - step), r });
 }
-inline float u01 (std::mt19937& g) { return std::uniform_real_distribution<float> (0.f, 1.f) (g); }
 
 inline char rollRole (char r, float m, bool octavey, std::mt19937& g)
 {
-    // Movement 0 keeps the written pitch. Higher movement swaps in a neighbouring chord tone.
-    if (m < 0.02f || u01 (g) > m * 0.80f) return r;
-    const float w[] = { 1.0f, octavey ? 1.05f : 0.30f, 0.50f * m + 0.04f, 0.42f * m + 0.04f, 0.22f * m, 0.16f * m, 0.08f * m, 0.08f * m };
+    // House bass lives on the root, the octave, the 5th and the b7. The 3rd and the 6th only appear
+    // when Movement is high, otherwise the line starts to sound like a melody instead of a bassline.
+    if (m < 0.08f || u01 (g) > m * 0.42f) return r;
+    const bool color = m > 0.72f;
+    const float w[] = { 1.15f, octavey ? 1.2f : 0.55f, 0.55f * m + 0.08f, 0.48f * m + 0.08f, color ? 0.18f * m : 0.f, color ? 0.10f * m : 0.f, 0.f, 0.f };
     static const char rs[] = { 'R', 'O', '5', '7', '3', '4', '6', '2' };
     float t = 0; for (float x : w) t += x;
     float x = u01 (g) * t;
-    for (int i = 0; i < 8; ++i) { x -= w[i]; if (x <= 0) return rs[i]; }
+    for (int i = 0; i < 8; ++i) { x -= w[i]; if (x <= 0 && w[i] > 0) return rs[i]; }
     return 'R';
+}
+
+inline int hookScore (const Bar& b, int style)
+{
+    if (b.size() < 2) return -200;
+    int s = 12, roots = 0, oct = 0, onAnd = 0;
+    for (auto& n : b)
+    {
+        if (n.r == 'R') ++roots;
+        else if (n.r == 'O') { ++roots; ++oct; }
+        else if (n.r == '5' || n.r == '7') s += 1;
+        else s -= 6;
+        if ((n.step % 4) == 2) ++onAnd;
+        const bool kickOk = style == Acid || style == TwoStep || style == Broken || style == Afro;
+        if (! kickOk && isKickStep (style, n.step)) s -= 12;
+    }
+    s += roots * 3 + oct;
+    if (style == Offbeat || style == Bassline || style == DeepTech) s += onAnd * 4;
+    if (style == Bouncy || style == SpeedGarage || style == Bassline) s += oct * 3;
+    if (style == Driving && (int) b.size() >= 8) s += 6;
+    return s;
 }
 
 inline bool longStyle (int s)
 {
     return s == TwoStep || s == SpeedGarage || s == DeepTech || s == Minimal || s == Afro;
+}
+
+// One bar of onsets. Mandatory steps are the style's identity (the "&", the tresillo).
+// The pool is shuffled by the rhythm seed and density takes the first k, so the same
+// knob position is a different groove per seed, and raising density only adds notes.
+inline void composeBar (Bar& b, const Params& P, std::mt19937& rr, float d)
+{
+    const bool houseKick = P.style != Acid && P.style != Afro && P.style != Broken;
+    std::vector<int> must, pool;
+    auto push = [&] (std::vector<int>& v, int s)
+    {
+        if (s < 0 || s > 15) return;
+        if (houseKick && isKickStep (P.style, s)) return;
+        if (P.style == Broken && isKickStep (Broken, s)) return;
+        for (int x : v) if (x == s) return;
+        for (int x : must) if (x == s) return;
+        v.push_back (s);
+    };
+    switch (P.style)
+    {
+        case Offbeat:
+            for (int s : { 2, 6, 10, 14 }) push (must, s);
+            if (d >= 0.22f) for (int s : { 3, 7, 11, 15, 1, 5, 9, 13 }) push (pool, s);
+            break;
+        case Driving:
+            for (int s : { 2, 6, 10, 14 }) push (must, s);
+            if (d >= 0.22f) for (int s : { 3, 7, 11, 15 }) push (pool, s);
+            if (d >= 0.55f) for (int s : { 1, 5, 9, 13 }) push (pool, s);
+            break;
+        case Afro:
+            for (int s : { 0, 3, 6 }) push (must, s);
+            for (int s : { 8, 10, 11, 14, 2, 5, 9, 12, 15, 13, 7, 4 }) push (pool, s);
+            break;
+        case Bassline:
+            for (int s : { 2, 6, 10, 14 }) push (must, s);
+            for (int s : { 3, 7, 11, 15, 1, 5, 9, 13 }) push (pool, s);
+            break;
+        case TwoStep: // eight off-grid answers; none of them is kick 0 or kick 10
+            for (int s : { 1, 3, 5, 7, 9, 11, 13, 15 }) push (pool, s);
+            break;
+        case SpeedGarage: case DeepTech: case Minimal:
+            for (int s : { 1, 3, 5, 7, 9, 11, 13, 15 }) push (pool, s);
+            break;
+        default:
+            for (int s = 0; s < 16; ++s) push (pool, s);
+            break;
+    }
+    int budget = pool.empty() ? 0 : (int) std::lround (std::clamp (d, 0.f, 1.f) * (float) pool.size());
+    budget = std::max (0, std::min ((int) pool.size(), budget));
+    for (int i = (int) pool.size() - 1; i > 0; --i)
+    {
+        const int j = (int) (rr() % (uint32_t) (i + 1));
+        std::swap (pool[(size_t) i], pool[(size_t) j]);
+    }
+    std::vector<int> steps = must;
+    const bool sustain = P.style == TwoStep || P.style == SpeedGarage || P.style == DeepTech || P.style == Minimal;
+    for (int i = 0; i < budget; ++i) steps.push_back (pool[(size_t) i]);
+    if (steps.empty()) steps.push_back (houseKick || P.style == TwoStep ? 2 : 0);
+    if (steps.size() < 2)
+    {
+        const int s0 = steps[0];
+        for (int alt : { s0 + 4, s0 + 6, s0 + 8, s0 - 4, 6, 10, 14, 2, 5, 9 })
+        {
+            int t = alt % 16; if (t < 0) t += 16;
+            if (houseKick && isKickStep (P.style, t)) continue;
+            if (P.style == TwoStep && (t == 0 || t == 10)) continue;
+            if (P.style == Broken && isKickStep (Broken, t)) continue;
+            bool exists = false; for (int x : steps) if (x == t) exists = true;
+            if (! exists) { steps.push_back (t); break; }
+        }
+    }
+    std::sort (steps.begin(), steps.end());
+    steps.erase (std::unique (steps.begin(), steps.end()), steps.end());
+    for (size_t i = 0; i < steps.size(); ++i)
+    {
+        int len = 1;
+        if (sustain)
+        {
+            const int next = i + 1 < steps.size() ? steps[i + 1] : 16;
+            len = std::max (2, next - steps[i]);
+        }
+        add (b, steps[i], len, 'R');
+    }
 }
 
 inline Bar buildHook (const Params& P, uint32_t salt)
@@ -275,211 +403,13 @@ inline Bar buildHook (const Params& P, uint32_t salt)
     const float d = std::max (0.f, std::min (1.f, P.density));
     const float m = std::max (0.f, std::min (1.f, P.movement));
     Bar b;
+    composeBar (b, P, rr, d);
 
-    switch (P.style)
-    {
-        case Offbeat:
-            for (int beat = 0; beat < 4; ++beat)
-            {
-                const bool pickup = d > 0.60f && u01 (rr) < (d - 0.60f) * 2.4f;
-                if (pickup) { add (b, beat * 4 + 2, 1, 'R'); add (b, beat * 4 + 3, 1, u01 (pr) < m * 0.7f ? '5' : 'R'); }
-                else add (b, beat * 4 + 2, 2, 'R');
-            }
-            break;
-
-        case Driving:
-        {
-            const int tier = d < 0.30f ? 1 : d < 0.55f ? 2 : 3; // &  →  &+a  →  e+&+a
-            for (int beat = 0; beat < 4; ++beat)
-            {
-                if (tier >= 3) add (b, beat * 4 + 1, 1, 'R');
-                add (b, beat * 4 + 2, 1, u01 (pr) < m * 0.5f ? 'O' : 'R');
-                if (tier >= 2) add (b, beat * 4 + 3, 1, 'R');
-            }
-            break;
-        }
-
-        case Bassline:
-            for (int beat = 0; beat < 4; ++beat)
-            {
-                add (b, beat * 4 + 2, 1, 'O');
-                if (d > 0.72f && u01 (rr) < (d - 0.72f) * 2.6f) add (b, beat * 4 + 3, 1, (beat & 1) ? 'R' : 'O');
-                if (d > 0.88f && u01 (rr) < (d - 0.88f) * 4.f) add (b, beat * 4 + 1, 1, 'R');
-            }
-            break;
-
-        case Rolling:
-        case Bouncy:
-        {
-            const bool oct = P.style == Bouncy;
-            std::vector<Bar> cells;
-            if (oct)
-            {
-                cells = { { { 2, 1, 'O' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 1, 1, 'O' }, { 2, 1, 'R' } },
-                          { { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
-            }
-            else
-            {
-                cells = { { { 2, 2, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 3, 1, 'R' } },
-                          { { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'R' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' } } };
-            }
-            const float target = oct ? (1.05f + d * 1.6f) : (1.15f + d * 1.75f);
-            auto choose = [&] {
-                float t = 0; std::vector<float> w;
-                for (auto& c : cells) { const float ww = 1.f / (0.35f + std::fabs ((float) c.size() - target)); w.push_back (ww); t += ww; }
-                float x = u01 (rr) * t;
-                for (size_t i = 0; i < w.size(); ++i) { x -= w[i]; if (x <= 0) return (int) i; }
-                return 0;
-            };
-            int X = choose(), Y = choose(), Z = choose();
-            for (int k = 0; Y == X && k < 5; ++k) Y = choose();
-            static const int forms[][4] = { { 0, 0, 0, 1 }, { 0, 1, 0, 1 }, { 0, 0, 1, 0 }, { 0, 1, 0, 2 }, { 0, 0, 0, 0 } };
-            const int form = (int) (rr() % (d < 0.35f ? 5 : 4));
-            const int ids[] = { X, Y, Z };
-            for (int beat = 0; beat < 4; ++beat)
-                for (auto& n : cells[(size_t) ids[forms[form][beat]]]) add (b, beat * 4 + n.step, n.len, n.r);
-            break;
-        }
-
-        case Acid:
-        {
-            static const Bar pats[] = {
-                { { 0, 2, 'R' }, { 2, 1, 'R' }, { 3, 1, 'O' }, { 5, 1, 'R' }, { 6, 2, 'O' }, { 8, 1, 'R' }, { 9, 1, 'R' }, { 10, 1, '5' }, { 12, 1, 'R' }, { 14, 2, 'O' } },
-                { { 0, 1, 'R' }, { 1, 1, 'R' }, { 2, 2, 'O' }, { 5, 1, 'R' }, { 6, 1, 'R' }, { 8, 1, 'O' }, { 10, 2, 'R' }, { 12, 1, '5' }, { 13, 1, '7' }, { 14, 1, 'R' }, { 15, 1, 'O' } },
-                { { 0, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, 'R' }, { 4, 2, 'R' }, { 7, 1, '5' }, { 8, 1, 'R' }, { 10, 1, 'O' }, { 11, 1, 'R' }, { 13, 1, '3' }, { 14, 1, '4' }, { 15, 1, '5' } },
-                { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 2, 'O' }, { 6, 1, 'R' }, { 7, 1, '5' }, { 8, 2, 'R' }, { 11, 1, 'O' }, { 12, 1, 'R' }, { 14, 2, '7' } },
-                { { 0, 1, 'O' }, { 1, 1, 'R' }, { 3, 1, 'R' }, { 4, 1, '5' }, { 6, 1, 'R' }, { 8, 1, 'O' }, { 9, 1, 'R' }, { 11, 1, '5' }, { 12, 2, 'R' }, { 15, 1, '7' } },
-                { { 0, 2, 'R' }, { 3, 1, 'O' }, { 4, 1, 'R' }, { 6, 2, '5' }, { 8, 1, 'R' }, { 9, 1, 'O' }, { 10, 1, 'R' }, { 12, 1, '7' }, { 13, 1, '5' }, { 14, 1, '4' }, { 15, 1, 'R' } } };
-            b = pats[rr() % 6];
-            if (d < 0.45f)
-            {
-                Bar kept; int dropped = 0;
-                for (auto& n : b)
-                {
-                    const bool weak = (n.step % 4) == 1 || (n.step % 4) == 3;
-                    if (weak && dropped < 3 && u01 (rr) < (0.45f - d) * 2.2f) { ++dropped; continue; }
-                    kept.push_back (n);
-                }
-                if ((int) kept.size() >= 6) b.swap (kept);
-            }
-            break;
-        }
-
-        case SpeedGarage:
-        {
-            static const Bar pats[] = {
-                { { 2, 4, 'O' }, { 6, 4, 'R' }, { 10, 4, 'O' }, { 14, 2, 'R' } },
-                { { 2, 3, 'O' }, { 6, 3, 'R' }, { 10, 3, 'O' }, { 14, 2, '7' } },
-                { { 2, 6, 'O' }, { 10, 4, 'R' }, { 14, 2, 'O' } },
-                { { 2, 4, 'R' }, { 6, 4, 'O' }, { 10, 4, 'R' }, { 14, 2, '7' } },
-                { { 2, 4, 'O' }, { 6, 2, 'R' }, { 10, 4, 'O' }, { 14, 2, 'R' } } };
-            b = pats[d < 0.28f ? (2 + (int) (rr() % 2)) : (int) (rr() % 5)];
-            if (d > 0.80f)
-            {
-                Bar extra;
-                for (auto& n : b)
-                {
-                    const int flick = n.step + n.len - 1; // last 16th of the hold, never a kick onset
-                    if (n.len >= 4 && flick > n.step && flick < 16 && ! isKickStep (SpeedGarage, flick) && u01 (rr) < (d - 0.75f) * 2.f)
-                    {
-                        extra.push_back ({ n.step, flick - n.step, n.r });
-                        extra.push_back ({ flick, 1, n.r == 'O' ? 'R' : 'O' });
-                    }
-                    else extra.push_back (n);
-                }
-                b.swap (extra);
-            }
-            break;
-        }
-
-        case TwoStep:
-        {
-            static const Bar pats[] = {
-                { { 0, 4, 'R' }, { 6, 2, '5' }, { 8, 4, 'O' }, { 14, 2, '7' } },
-                { { 0, 3, 'R' }, { 4, 2, 'O' }, { 8, 3, 'R' }, { 12, 2, '5' }, { 14, 2, '7' } },
-                { { 2, 3, 'R' }, { 6, 2, 'O' }, { 10, 4, 'R' }, { 14, 2, '7' } },
-                { { 0, 2, 'R' }, { 3, 3, 'O' }, { 8, 4, 'R' }, { 13, 3, '5' } },
-                { { 0, 4, 'R' }, { 8, 4, 'O' }, { 12, 4, '5' } } };
-            b = pats[rr() % 5];
-            if (d < 0.35f && b.size() > 4) b.pop_back();
-            if (d > 0.78f)
-            {
-                for (int s = 1; s < 15; ++s)
-                {
-                    bool taken = false; for (auto& n : b) taken |= n.step == s || (s > n.step && s < n.step + n.len);
-                    if (! taken && u01 (rr) < (d - 0.78f) * 1.5f) { add (b, s, 1, u01 (pr) < 0.5f ? 'R' : '5'); break; }
-                }
-            }
-            break;
-        }
-
-        case Minimal:
-        {
-            static const Bar pats[] = {
-                { { 2, 2, 'R' }, { 6, 2, 'O' }, { 10, 2, 'R' } },
-                { { 2, 3, 'R' }, { 10, 3, 'R' }, { 14, 1, '7' } },
-                { { 2, 2, 'R' }, { 10, 2, 'R' }, { 14, 2, '5' } },
-                { { 2, 2, 'R' }, { 6, 2, 'O' }, { 14, 2, 'R' } },
-                { { 6, 3, 'R' }, { 10, 2, 'R' }, { 14, 2, '7' } } };
-            b = pats[rr() % 5];
-            if (d > 0.75f)
-            {
-                for (int s : { 14, 6, 15, 3 })
-                {
-                    bool taken = false; for (auto& n : b) taken |= n.step == s;
-                    if (! taken) { add (b, s, 1, 'R'); break; }
-                }
-            }
-            break;
-        }
-
-        case Broken:
-        {
-            static const Bar pats[] = {
-                { { 2, 2, 'R' }, { 4, 2, 'O' }, { 8, 1, 'R' }, { 11, 2, '5' }, { 14, 2, 'R' } },
-                { { 1, 2, 'R' }, { 4, 1, 'O' }, { 7, 2, 'R' }, { 11, 2, '5' }, { 15, 1, '7' } },
-                { { 3, 2, 'R' }, { 8, 2, 'O' }, { 11, 1, 'R' }, { 14, 2, '5' } },
-                { { 2, 2, 'R' }, { 4, 2, '5' }, { 8, 2, 'R' }, { 11, 2, 'O' }, { 15, 1, '7' } },
-                { { 1, 1, 'R' }, { 3, 2, 'O' }, { 8, 1, 'R' }, { 10, 2, '5' }, { 14, 2, 'R' } } };
-            b = pats[rr() % 5];
-            if (d < 0.30f && b.size() > 4) b.pop_back();
-            break;
-        }
-
-        case Afro:
-        {
-            static const Bar pats[] = {
-                { { 0, 2, 'R' }, { 3, 2, 'R' }, { 6, 2, '5' }, { 8, 2, 'R' }, { 11, 2, '5' }, { 14, 2, 'R' } },
-                { { 0, 2, 'R' }, { 3, 2, '5' }, { 6, 2, 'R' }, { 8, 2, 'O' }, { 11, 2, 'R' }, { 14, 2, '7' } },
-                { { 0, 3, 'R' }, { 3, 3, '5' }, { 6, 2, 'R' }, { 8, 2, 'R' }, { 11, 3, 'O' }, { 14, 2, 'R' } },
-                { { 0, 2, 'R' }, { 3, 2, 'R' }, { 6, 2, '5' }, { 8, 2, '5' }, { 11, 2, 'R' }, { 14, 2, '7' } } };
-            b = pats[rr() % 4];
-            if (d < 0.32f)
-                b.erase (std::remove_if (b.begin(), b.end(), [] (const Hn& n) { return n.step == 8 || n.step == 11; }), b.end());
-            break;
-        }
-
-        case DeepTech:
-        {
-            static const Bar pats[] = {
-                { { 2, 4, 'R' }, { 10, 4, 'R' }, { 14, 2, '7' } },
-                { { 2, 6, 'R' }, { 10, 4, 'O' }, { 14, 2, 'R' } },
-                { { 2, 3, 'R' }, { 6, 2, '5' }, { 10, 4, 'R' } },
-                { { 6, 4, 'R' }, { 10, 3, 'R' }, { 14, 2, '7' } },
-                { { 2, 6, 'R' }, { 10, 4, 'R' }, { 14, 2, '5' } } };
-            b = pats[rr() % 5];
-            if (d < 0.28f && b.size() > 3) b.pop_back();
-            break;
-        }
-
-        default: break;
-    }
-
-    const bool octavey = P.style == Bouncy || P.style == Bassline || P.style == SpeedGarage || P.style == Acid;
-    const float mEff = m * (P.style == Minimal || P.style == DeepTech || P.style == Offbeat ? 0.45f
-                            : P.style == Driving || P.style == Afro ? 0.65f
-                            : P.style == Bassline || P.style == SpeedGarage ? 0.35f : 1.f);
-    if (P.style != Bassline && P.style != SpeedGarage && P.style != Afro)
+    const bool octavey = P.style == Bouncy || P.style == Bassline || P.style == SpeedGarage;
+    const float mEff = m * (P.style == Minimal || P.style == DeepTech || P.style == Offbeat ? 0.35f
+                            : P.style == Driving || P.style == Afro ? 0.45f
+                            : P.style == Bassline || P.style == SpeedGarage || P.style == Rolling ? 0.4f : 0.7f);
+    if (P.style != Bassline && P.style != SpeedGarage && P.style != Afro && P.style != Acid)
         for (auto& n : b) n.r = rollRole (n.r, mEff, octavey, pr);
     else if (m > 0.15f)
         for (size_t i = 1; i < b.size(); ++i) if (u01 (pr) < mEff * 0.45f) b[i].r = rollRole (b[i].r, mEff, octavey, pr);
@@ -487,33 +417,39 @@ inline Bar buildHook (const Params& P, uint32_t salt)
     sortBar (b);
     if (! b.empty() && P.style != Bassline && P.style != SpeedGarage && P.style != Bouncy) b.front().r = 'R';
     if (P.style == Afro)
-        for (auto& n : b) if (n.step == 0) n.r = 'R'; // the tresillo lands on the root
+        for (auto& n : b) if (n.step == 0) n.r = 'R';
+    if (! b.empty() && m > 0.12f && (P.style == Rolling || P.style == Driving || P.style == Offbeat || P.style == Bouncy) && b.back().step != b.front().step)
+    {
+        static const char cad[] = { 'R', 'O', '7', '5' };
+        b.back().r = cad[(P.pitchSeed + salt) % (m > 0.6f ? 4u : 3u)];
+    }
     return b;
 }
 
 inline Bar fill (int style, bool big, int index)
 {
-    static const Bar small[] = {
-        { { 1, 1, '5' }, { 2, 1, '7' }, { 3, 1, 'R' } },
-        { { 2, 1, '7' }, { 3, 1, '5' } },
-        { { 2, 2, '5' } },
-        { { 1, 1, 'R' }, { 2, 1, '5' }, { 3, 1, '7' } },
-        { { 2, 1, 'O' }, { 3, 1, '7' } } };
-    static const Bar large[] = {
-        { { 1, 1, 'O' }, { 2, 1, '7' }, { 3, 1, '5' } },
-        { { 1, 1, '5' }, { 2, 1, '4' }, { 3, 1, '7' } },
-        { { 1, 1, '3' }, { 2, 1, '5' }, { 3, 1, '7' } },
-        { { 2, 1, '7' }, { 3, 1, 'O' } } };
-    static const Bar acidS[] = {
-        { { 0, 1, 'O' }, { 1, 1, '7' }, { 2, 1, '5' }, { 3, 1, '3' } },
-        { { 0, 1, 'R' }, { 1, 1, '3' }, { 2, 1, '4' }, { 3, 1, '5' } },
+    // Endings stay in the style. A shared 5-7-3 run is what made every genre sound like the same fill.
+    static const Bar rollS[] = {
+        { { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 2, 1, 'R' }, { 3, 1, '7' } }, { { 2, 2, 'O' } },
+        { { 1, 1, 'R' }, { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 2, 1, 'O' }, { 3, 1, '7' } } };
+    static const Bar rollB[] = {
+        { { 1, 1, 'O' }, { 2, 1, '7' }, { 3, 1, '5' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, '7' } },
+        { { 2, 1, '7' }, { 3, 1, '5' } }, { { 1, 1, 'O' }, { 2, 1, '5' }, { 3, 1, '7' } } };
+    static const Bar bounce[] = {
+        { { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 1, 1, 'O' }, { 2, 1, 'R' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } } };
+    static const Bar drive[] = {
+        { { 2, 1, 'O' }, { 3, 1, '7' } }, { { 2, 1, 'R' }, { 3, 1, 'O' } }, { { 1, 1, 'R' }, { 2, 1, 'O' }, { 3, 1, '7' } } };
+    static const Bar broken[] = {
+        { { 2, 1, '5' }, { 3, 1, '7' } }, { { 2, 1, 'O' }, { 3, 1, 'R' } }, { { 0, 1, 'R' }, { 2, 1, '7' }, { 3, 1, '5' } } };
+    static const Bar acid[] = {
+        { { 0, 1, 'O' }, { 1, 1, '7' }, { 2, 1, '5' }, { 3, 1, 'R' } },
+        { { 0, 1, 'R' }, { 1, 1, 'O' }, { 2, 1, '7' }, { 3, 1, '5' } },
         { { 1, 1, 'O' }, { 2, 1, '5' }, { 3, 1, '7' } } };
-    static const Bar acidB[] = {
-        { { 0, 1, 'O' }, { 1, 1, '7' }, { 2, 1, '5' }, { 3, 1, '4' } },
-        { { 0, 1, '5' }, { 1, 1, '4' }, { 2, 1, '3' }, { 3, 1, 'R' } },
-        { { 0, 1, 'R' }, { 1, 1, 'O' }, { 2, 1, '7' }, { 3, 1, '5' } } };
-    if (style == Acid) return (big ? acidB[index % 3] : acidS[index % 3]);
-    return big ? large[index % 4] : small[index % 5];
+    if (style == Acid) return acid[index % 3];
+    if (style == Bouncy) return bounce[index % 3];
+    if (style == Driving) return drive[index % 3];
+    if (style == Broken) return broken[index % 3];
+    return big ? rollB[index % 4] : rollS[index % 5];
 }
 
 enum Role { Hook, Answer, Vary, Turn };
@@ -544,7 +480,7 @@ inline void paintPitch (Bar& b, Role role, int phrase, uint32_t take)
         if (idx < 0) { b.push_back ({ 14, 2, '7' }); sortBar (b); idx = (int) b.size() - 1; }
     }
     if (idx < 0 || idx >= (int) b.size()) return;
-    static const char choices[] = { '7', '5', '3', 'O' };
+    static const char choices[] = { '7', '5', 'O', 'R' };
     char next = choices[(take + (uint32_t) phrase + (uint32_t) role) % 4];
     if (next == b[(size_t) idx].r) next = next == '5' ? '7' : '5';
     b[(size_t) idx].r = next;
@@ -558,7 +494,7 @@ inline void paintFill (Bar& b, const Bar& f, uint32_t take)
     sortBar (b);
     if (! b.empty())
     {
-        static const char o[] = { '7', '5', '3' };
+        static const char o[] = { '7', '5', 'O' }; // a leading tone back to the root, not a random 3rd
         b.back().r = o[take % 3];
     }
 }
@@ -575,6 +511,57 @@ inline void paintVary (Bar& b, const Bar& alt)
     sortBar (b);
 }
 } // namespace detail
+
+// Pitches come only from the pitch seed, so Lock Pitch keeps them when the rhythm changes
+// and Lock Rhythm still gets new notes.
+inline char pitchRole (const Params& P, int index)
+{
+    const uint32_t h = mix32 (P.pitchSeed * 747796405u + (uint32_t) index * 2891336453u + (uint32_t) P.style * 97u);
+    const float u = (h >> 8) * (1.0f / 16777216.0f);
+    const float m = std::max (0.f, std::min (1.f, P.movement));
+    if (index == 0 && P.style != Bouncy && P.style != Bassline && P.style != SpeedGarage) return 'R';
+    if (P.style == Bassline)
+    {
+        if (index == 1)
+        {
+            static const char o[] = { 'O', 'R', '7', '5' };
+            return o[mix32 (P.pitchSeed + 3u) % 4];
+        }
+        return 'O';
+    }
+    if (P.style == SpeedGarage)
+    {
+        if (index == 1)
+        {
+            static const char o[] = { 'R', 'O', '7', '5' };
+            return o[mix32 (P.pitchSeed + 9u) % 4];
+        }
+        return (index & 1) ? 'R' : 'O';
+    }
+    if (P.style == Bouncy)
+    {
+        static const char o[] = { 'O', 'R', 'O', 'R', 'O', '7', 'R', 'O' };
+        return o[h % 8];
+    }
+    if (P.style == Acid)
+    {
+        static const char o[] = { 'R', 'R', 'O', '5', '7', 'R', 'O', '5' };
+        return o[h % 8];
+    }
+    if (u > 0.22f + m * 0.55f) return 'R';
+    static const char p[] = { 'O', '5', '7', 'R' };
+    return p[h % 4];
+}
+inline void assignHookPitch (detail::Bar& hook, const Params& P)
+{
+    std::sort (hook.begin(), hook.end(), [] (const detail::Hn& a, const detail::Hn& c) { return a.step < c.step; });
+    for (size_t i = 0; i < hook.size(); ++i) hook[i].r = pitchRole (P, (int) i);
+}
+inline int chordSemis (int shiftDeg)
+{
+    // Menu labels are minor roman numerals, so the interval is the natural-minor one in every scale.
+    return degToSemi (shiftDeg, Minor);
+}
 
 inline float slideChance (int style, float movement)
 {
@@ -594,8 +581,24 @@ inline std::vector<Note> generate (const Params& P)
 {
     const int nb = std::max (1, std::min (16, P.bars));
     const float v = std::max (0.f, std::min (1.f, P.variation));
+    // Several hooks from this seed, keep the one that sits in the style. Same seeds always pick the same one.
+    // Salt 0 is the seed's own hook. Only replace it when another take is clearly stronger,
+    // so Generate stays varied instead of collapsing onto one "highest scoring" grid.
+    // Salt 0 only. A search that scores pitched hooks would let the pitch seed
+    // change the rhythm, and Lock Rhythm would not hold.
     detail::Bar hook = detail::buildHook (P, 0u);
     if (hook.empty()) detail::add (hook, 2, 2, 'R');
+    assignHookPitch (hook, P);
+    if (P.mutations > 0 && hook.size() > 1)
+    {
+        // Edit the hook itself, so every repeat of it changes together. Always a pitch, never velocity-only.
+        const uint32_t h = mix32 ((P.mutateSeed ? P.mutateSeed : 1u) + (uint32_t) P.mutations * 97u);
+        const int idx = 1 + (int) (h % (uint32_t) (hook.size() - 1));
+        static const char roles[] = { 'O', '5', '7', 'R' };
+        char nr = roles[h % 4];
+        if (nr == hook[(size_t) idx].r) nr = roles[(h + 1) % 4];
+        hook[(size_t) idx].r = nr;
+    }
 
     std::mt19937 fr (P.rhythmSeed * 97531u + (uint32_t) P.style * 13u + 7u);
     const int smallId = (int) ((fr() + P.take) % 5u);
@@ -612,7 +615,9 @@ inline std::vector<Note> generate (const Params& P)
         const detail::Role role = detail::roleOf (bar, nb, v);
         const int phrase = bar / 4;
         detail::Bar b = hook;
-        if (detail::longStyle (P.style))
+        // Offbeat and bassline keep their grid. The answer is a different pitch, not a chopped 16th fill.
+        const bool gentle = detail::longStyle (P.style) || P.style == Offbeat || P.style == Bassline;
+        if (gentle)
             detail::paintPitch (b, role, phrase, P.take);
         else if (role == detail::Vary)
         {
@@ -624,7 +629,14 @@ inline std::vector<Note> generate (const Params& P)
 
         for (auto& n : b)
         {
-            Note o; o.step = bar * 16 + n.step; o.len = n.len; o.deg = roleDeg (n.r) + barShift (o.step); o.vel = 100;
+            Note o; o.step = bar * 16 + n.step; o.len = n.len; o.vel = 100;
+            const int sh = barShift (o.step);
+            if (P.scale == MinorPent || P.scale == Major || P.scale == HarmMinor)
+            {
+                o.deg = roleDeg (n.r);
+                o.add = chordSemis (sh);
+            }
+            else o.deg = roleDeg (n.r) + sh;
             out.push_back (o);
         }
     }
@@ -713,27 +725,23 @@ inline std::vector<Note> generate (const Params& P)
         if (P.style == Acid && pos == 0) base = 124;
         if (P.style == Acid && pos == 2) base = 118;
         const float acc = 0.35f + 1.15f * std::max (0.f, std::min (1.f, P.accent));
-        const int wob = (int) (hash01 (P.rhythmSeed ^ (uint32_t) (n.step % 16) * 29u) * 5.f) - 2;
+        const int wob = (int) (hash01 (P.pitchSeed ^ (uint32_t) (n.step % 16) * 29u) * 5.f) - 2;
         n.vel = std::clamp ((int) (100 + (base - 100) * acc) + wob, 58, 127);
     }
-
-    if (P.mutations > 0 && ! out.empty())
+    // A new pitch seed is always a new pattern, including styles whose roles are almost fixed.
+    // Applied once per bar so a repeated hook stays identical.
+    for (int bar = 0; bar < nb; ++bar)
     {
-        std::mt19937 mr (P.mutateSeed ? P.mutateSeed : 1u);
-        static const char roles[] = { 'R', 'O', '5', '7', '3' };
-        int done = 0;
-        for (int tries = 0; done < P.mutations * 2 && tries < 200; ++tries)
+        Note* first = nullptr; Note* second = nullptr;
+        for (auto& n : out)
         {
-            auto& n = out[mr() % out.size()];
-            if (n.ghost) continue;
-            if (mr() % 3 == 0) { n.vel = std::clamp (n.vel + 8 + (int) (mr() % 17) * ((mr() & 1) ? 1 : -1), 58, 127); ++done; }
-            else
-            {
-                const int nd = roleDeg (roles[mr() % 5]) + barShift (n.step);
-                if (nd != n.deg) { n.deg = nd; ++done; }
-            }
+            if (n.ghost || n.step / 16 != bar) continue;
+            if (first == nullptr) first = &n;
+            else { second = &n; break; }
         }
+        if (Note* t = second ? second : first) t->vel = std::clamp (64 + (int) (P.pitchSeed % 41u), 40, 127);
     }
+
     return out;
 }
 } // namespace ut

@@ -20,7 +20,8 @@ INSTALL
 
 USE
   Load Undertow as an instrument and press play (or hit the play button in the
-  plugin to hear it before the DAW is running). Turn KICK off once you're in a track.
+  plugin to hear it before the DAW is running). KICK is a preview only: it plays
+  while TRY is running, and it is left out of the host and out of bounces.
 
   1. Pick a STYLE. Each one is a different kind of bassline, and it sets a swing
      that fits (move Swing afterwards if you want your own). The tempo readout
@@ -30,25 +31,37 @@ USE
   3. GENERATE is a new bassline. VARY keeps the idea and changes a few notes.
      UNDO / REDO if you lose one you liked.
      LOCK RHYTHM keeps the groove and writes new notes.
-     LOCK PITCH keeps the notes and writes a new groove.
+     LOCK PITCH keeps the pitch roles and writes a new rhythm.
   4. SHAPE
-       Density    how many notes
+       Density    how many notes. Every part of the knob adds or removes hits.
        Movement   how far it leaves the root
        Variation  0 = the hook loops, higher = more call and response, 100% = a new turn every bar
        Length     short and plucky, or held
   5. FEEL: Swing and Glide. Ghosts are the quiet pickups. Accent is how hard the
      offbeat hits.
   6. CHORDS moves the root each bar (Auto, stay on i, i-VI, i-VII, i-iv, and longer loops).
-     MIDI KEY: play a note (or a chord; the lowest note wins) and the key follows.
+     The interval is the natural-minor one in every scale, including Minor Pentatonic.
+     MIDI KEY is off by default. Turn it on and a note-on sets the root inside the
+     plugin. It does not write the Key parameter, so it will not chase its own MIDI.
+     PLAY MODE: Always (with the host), Note Held (the pattern plays only while a
+     note is held, and the lowest note sets the root), or Synth (Undertow plays
+     the MIDI you send it, no pattern).
+     KICK GAP (default 12 ms) shortens holds so a note is silent just before the
+     kick, in the synth and in exported MIDI.
   7. SOUND: Sub, Rubber, Reese, Organ, Acid, Growl. Tone, Drive, Volume.
-     EVOLVE plays a new answer every time the loop comes around. The hook stays.
+     EVOLVE plays a new answer every time the loop comes around, counted from the
+     host's position, so a bounce matches what you heard. The hook stays. The saved
+     take does not change.
 
   THE PIANO ROLL
     CLICK add a note. DRAG move it. EDGE resize it. RIGHT-CLICK or DOUBLE-CLICK delete.
     ALT-CLICK toggles a slide. Drag in the VEL lane to change velocity.
+    Wheel scrolls. Ctrl-wheel (cmd-wheel) zooms to 2x or 4x, which is how an
+    8- or 16-bar roll stays editable.
     The dots above the grid are the kick for this style, so you can see the bass
     sitting in the pocket. Chord names sit on top. EDITED means you changed it by hand;
-    those edits are saved with the project. CLEAR wipes the roll.
+    those edits are saved with the project. The notes themselves are always saved,
+    so reopening a session after an update plays the same bassline. CLEAR wipes the roll.
 
   IDEAS
     Eight slots under the roll. Click an empty slot to keep the current bassline,
@@ -57,7 +70,8 @@ USE
 
   PRESETS
     Eighteen factory presets. Click the name, or use the arrows. A * means you've
-    changed it.
+    changed it. Save preset... stores yours (rename and delete live in that menu)
+    under Token Wise/Undertow in your app-data folder.
 
   GET THE MIDI
     Drag the DRAG MIDI tile onto a clip in your DAW, or hit EXPORT.
@@ -85,5 +99,6 @@ STYLES
   DEEP TECH      long offbeat subs that slide. Try 125 BPM.
   BASSLINE       bouncy offbeat octaves. Try 138 BPM.
 
-The bassline is saved with your project, including the seed, so reopening the
-session brings the same one back.
+The bassline is saved with your project as the actual notes, so reopening the
+session brings the same one back even after an update. A generator control
+(or GENERATE / VARY) is what rolls a new one.

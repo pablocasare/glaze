@@ -81,8 +81,11 @@ jobs:
         run: |
           curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
           unzip -q pluginval.zip
-          pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+          VAL=pluginval.app/Contents/MacOS/pluginval
+          "$VAL" --strictness-level 10 --validate-in-process --timeout-ms 600000 \
             "build-undertow/Undertow_artefacts/Release/VST3/Undertow.vst3"
+          "$VAL" --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+            "build-undertow/Undertow_artefacts/Release/AU/Undertow.component"
 
       - name: Package
         run: |

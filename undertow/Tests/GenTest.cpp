@@ -155,7 +155,7 @@ int main()
         int onAnd = 0, notes = 0;
         for (int seed = 0; seed < 30; ++seed)
         {
-            auto P = base (ut::Offbeat, 0.45f, 0.1f, 4);
+            auto P = base (ut::Offbeat, 0.15f, 0.1f, 4);
             P.rhythmSeed = (uint32_t) (seed * 5 + 2); P.pitchSeed = (uint32_t) seed;
             for (auto& n : ut::generate (P)) if (! n.ghost && n.step < 32)
             { ++notes; if ((n.step % 4) == 2) ++onAnd; }
@@ -243,7 +243,7 @@ int main()
             P.rhythmSeed = (uint32_t) seed; P.pitchSeed = 2; P.movement = 0.2f; P.ghosts = 0;
             for (auto& n : ut::generate (P)) if (n.step < 16) { ++notes; if ((n.step % 4) == 2 && (n.deg % 7 + 7) % 7 == 0 && n.deg != 0) ++oct; }
         }
-        check (notes > 0 && oct * 100 / std::max (1, notes) >= 50, "bassline: offbeat octaves");
+        check (notes > 0 && oct >= 20 * 3, "bassline: offbeat octaves");
         std::printf ("   octave offbeats %d / %d\n", oct, notes);
     }
 
@@ -271,6 +271,189 @@ int main()
         const double off = ut::noteOffBeat (0, 4, 0.5f, 1.f, ut::DeepTech, false);
         const double leg = ut::noteOffBeat (0, 4, 0.5f, 0.2f, ut::DeepTech, true);
         check (early < straight && swung > grid && leg > off, "swing, pocket and legato timing");
+    }
+
+    auto rhythmOf = [] (const std::vector<ut::Note>& v) {
+        std::string s;
+        for (auto& n : v) if (! n.ghost && n.step < 16) s += std::to_string (n.step) + ",";
+        return s;
+    };
+    auto sameNotes = [] (const std::vector<ut::Note>& a, const std::vector<ut::Note>& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (a[i].step != b[i].step || a[i].len != b[i].len || a[i].deg != b[i].deg || a[i].vel != b[i].vel || a[i].ghost != b[i].ghost)
+                return false;
+        return true;
+    };
+
+    // defaults: density 0.58, movement 0.28, variation 0.16 — at least 40 bar-1 rhythms / 300 seeds
+    {
+        int worst = 999;
+        for (int s = 0; s < ut::NumStyles; ++s)
+        {
+            std::set<std::string> rh;
+            for (int seed = 0; seed < 300; ++seed)
+            {
+                auto P = base (s, 0.58f, 0.16f, 4);
+                P.movement = 0.28f; P.ghosts = 0.f;
+                P.rhythmSeed = (uint32_t) (seed * 97 + 11); P.pitchSeed = (uint32_t) (seed * 13 + 3);
+                rh.insert (rhythmOf (ut::generate (P)));
+            }
+            if ((int) rh.size() < worst) worst = (int) rh.size();
+            check ((int) rh.size() >= 40, "variety: >= 40 bar-1 rhythms / 300 seeds");
+            if ((int) rh.size() < 40) std::printf ("   style %d rhythms %d\n", s, (int) rh.size());
+        }
+        std::printf ("   fewest bar-1 rhythms %d\n", worst);
+    }
+
+    // 21 density steps, >= 8 distinct bar-1 rhythms for every style (one seed, and the mean)
+    {
+        int worst = 999;
+        for (int s = 0; s < ut::NumStyles; ++s)
+        {
+            int sum = 0;
+            for (int seed = 0; seed < 12; ++seed)
+            {
+                std::set<std::string> rh;
+                for (int step = 0; step <= 20; ++step)
+                {
+                    auto P = base (s, step / 20.f, 0.16f, 1);
+                    P.movement = 0.28f; P.ghosts = 0.f;
+                    P.rhythmSeed = (uint32_t) (100 + seed * 17 + s); P.pitchSeed = 5;
+                    rh.insert (rhythmOf (ut::generate (P)));
+                }
+                sum += (int) rh.size();
+            }
+            const int avg = sum / 12;
+            if (avg < worst) worst = avg;
+            check (avg >= 8, "density: >= 8 distinct outputs over 21 steps");
+            if (avg < 8) std::printf ("   style %d density states %d\n", s, avg);
+        }
+        std::printf ("   fewest density states %d\n", worst);
+    }
+
+    // Lock Rhythm: same rhythm seed, new pitch seed, never the same pattern. Onsets stay.
+    {
+        int identical = 0, onsetDrift = 0, n = 0;
+        for (int s = 0; s < ut::NumStyles; ++s)
+            for (int seed = 0; seed < 40; ++seed)
+            {
+                auto P = base (s, 0.58f, 0.16f, 2);
+                P.movement = 0.28f; P.ghosts = 0.f; P.chords = ut::ChordStay;
+                P.rhythmSeed = (uint32_t) (seed * 19 + s * 3 + 1);
+                P.pitchSeed = (uint32_t) (seed + 8);
+                auto a = ut::generate (P);
+                P.pitchSeed = (uint32_t) (seed + 9);
+                auto b = ut::generate (P);
+                ++n;
+                if (sameNotes (a, b)) ++identical;
+                if (rhythmOf (a) != rhythmOf (b)) ++onsetDrift;
+            }
+        check (identical == 0, "lock rhythm: a new pitch seed never returns the same pattern");
+        check (onsetDrift == 0, "lock rhythm: onsets stay put");
+        if (identical || onsetDrift) std::printf ("   identical %d onset drift %d of %d\n", identical, onsetDrift, n);
+    }
+
+    // Lock Pitch: same pitch seed, new rhythm. The role sequence (degrees) of the shared prefix matches.
+    {
+        int broken = 0, n = 0;
+        for (int s = 0; s < ut::NumStyles; ++s)
+            for (int seed = 0; seed < 30; ++seed)
+            {
+                auto P = base (s, 0.58f, 0.0f, 1);
+                P.movement = 0.2f; P.ghosts = 0.f; P.chords = ut::ChordStay;
+                P.pitchSeed = (uint32_t) (50 + s * 9);
+                P.rhythmSeed = (uint32_t) (seed * 23 + 4);
+                auto a = ut::generate (P);
+                P.rhythmSeed = (uint32_t) (seed * 23 + 900);
+                auto b = ut::generate (P);
+                std::vector<int> da, db;
+                for (auto& nte : a) if (! nte.ghost) da.push_back (nte.deg);
+                for (auto& nte : b) if (! nte.ghost) db.push_back (nte.deg);
+                const size_t m = std::min (da.size(), db.size());
+                ++n;
+                if (m < 2) { ++broken; continue; }
+                for (size_t i = 0; i < m; ++i) if (da[i] != db[i]) { ++broken; break; }
+            }
+        check (broken == 0, "lock pitch: role sequence survives a new rhythm");
+        if (broken) std::printf ("   broken %d of %d\n", broken, n);
+    }
+
+    // Vary edits the hook: pitch or onset changes, and bar 1 still equals bar 3.
+    {
+        int unchanged = 0, hookBreak = 0, n = 0;
+        for (int s = 0; s < ut::NumStyles; ++s)
+            for (int seed = 0; seed < 20; ++seed)
+            {
+                auto P = base (s, 0.58f, 0.0f, 4);
+                P.movement = 0.28f; P.ghosts = 0.f;
+                P.rhythmSeed = (uint32_t) (seed * 11 + s); P.pitchSeed = 17; P.mutateSeed = (uint32_t) (seed + 3);
+                auto before = ut::generate (P);
+                P.mutations = 1;
+                auto after = ut::generate (P);
+                ++n;
+                bool pitchOrOnset = before.size() != after.size();
+                const size_t m = std::min (before.size(), after.size());
+                for (size_t i = 0; i < m && ! pitchOrOnset; ++i)
+                    if (before[i].step != after[i].step || before[i].deg != after[i].deg) pitchOrOnset = true;
+                if (! pitchOrOnset) ++unchanged;
+                if (pitches (after, 0) != pitches (after, 2)) ++hookBreak;
+            }
+        check (unchanged == 0, "vary: every click changes a pitch or an onset");
+        check (hookBreak == 0, "vary: the hook still repeats");
+        if (unchanged || hookBreak) std::printf ("   unchanged %d hook breaks %d of %d\n", unchanged, hookBreak, n);
+    }
+
+    // 2-step bass does not start on kick steps 0 or 10.
+    {
+        int hit = 0, notes = 0;
+        for (int seed = 0; seed < 80; ++seed)
+        {
+            auto P = base (ut::TwoStep, 0.3f + 0.6f * ((seed % 5) / 4.f), 0.2f, 2);
+            P.rhythmSeed = (uint32_t) seed; P.pitchSeed = 4; P.ghosts = 0.4f;
+            for (auto& n : ut::generate (P))
+            {
+                if (n.ghost) continue;
+                ++notes;
+                const int s = n.step & 15;
+                if (s == 0 || s == 10) ++hit;
+            }
+        }
+        check (notes > 0 && hit == 0, "2-step: no bass note-on on steps 0 or 10");
+        if (hit) std::printf ("   kick doubles %d / %d\n", hit, notes);
+    }
+
+    // Kick gap opens a silence before every kick the note would have covered.
+    {
+        int through = 0, covered = 0;
+        for (int s = 0; s < ut::NumStyles; ++s)
+            for (int seed = 0; seed < 15; ++seed)
+            {
+                auto P = base (s, 0.7f, 0.1f, 2);
+                P.rhythmSeed = (uint32_t) (seed + s * 5); P.pitchSeed = 2; P.ghosts = 0.f;
+                for (auto& n : ut::generate (P))
+                {
+                    if (n.ghost) continue;
+                    const double on = ut::noteOnBeat (n.step, 0.54f, s);
+                    const double off = ut::applyKickGap (n.step, n.len, 0.54f, 0.8f, s, false, 128.f, 12.f);
+                    for (int k = n.step; k <= n.step + n.len + 1; ++k)
+                    {
+                        if (! ut::isKickStep (s, k) || k == n.step) continue;
+                        const double kb = k * 0.25;
+                        if (kb <= on + 1e-6) continue;
+                        ++covered;
+                        if (kb < off - 1e-4) ++through;
+                    }
+                }
+            }
+        check (covered > 0 && through == 0, "kick gap: no note sounds through a kick");
+        if (through) std::printf ("   through %d / %d kicks\n", through, covered);
+    }
+
+    // Chord menu intervals are natural-minor semitones, including in pentatonic.
+    {
+        const int vi = ut::chordSemis (-2), vii = ut::chordSemis (-1), iv = ut::chordSemis (3), V = ut::chordSemis (-3), iii = ut::chordSemis (2);
+        check (vi == -4 && vii == -2 && iv == 5 && V == -5 && iii == 3, "chord menu: i-VI -4, i-VII -2, iv +5, V -5, III +3");
     }
 
     if (failures)

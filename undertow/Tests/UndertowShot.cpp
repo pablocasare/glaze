@@ -104,13 +104,17 @@ int main (int argc, char** argv)
         bool st = b.slotUsed (2) && again.size() == keep.size(); for (size_t k = 0; st && k < keep.size(); ++k) st = keep[k].step == again[k].step && keep[k].deg == again[k].deg;
         std::printf ("%s slot recall\n%s slot restores settings\n%s slots saved with project\n", same ? "PASS" : "FAIL", styleBack ? "PASS" : "FAIL", st ? "PASS" : "FAIL"); failures += ! same + ! styleBack + ! st;
     }
-    // MIDI key in: playing a G changes the key to G
+    // MIDI key is off by default. When it is on, a note-on latches the root and does not write the Key parameter.
     {
         UndertowProcessor a; Head h; a.setPlayHead (&h); a.prepareToPlay (48000, 256); a.regenerate();
+        const int keyBefore = (int) a.p ("key");
+        const bool off = a.p ("keyIn") < 0.5f && a.p ("kick") < 0.5f;
+        setP (a, "keyIn", 1.f);
         juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m; m.addEvent (juce::MidiMessage::noteOn (1, 55, (juce::uint8) 100), 0);
         a.processBlock (buf, m); a.pump();
-        const bool ok = (int) a.p ("key") == 7;
-        std::printf ("%s midi note sets key\n", ok ? "PASS" : "FAIL"); failures += ! ok;
+        const bool latched = a.rootMidi() % 12 == 7 && (int) a.p ("key") == keyBefore;
+        std::printf ("%s midi key defaults off and latches G without writing Key\n", (off && latched) ? "PASS" : "FAIL");
+        failures += ! (off && latched);
     }
     // print takes: with EVOLVE on, DRAG writes 4 different takes back to back
     {
