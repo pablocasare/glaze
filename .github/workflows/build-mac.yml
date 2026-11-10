@@ -2,7 +2,7 @@ name: Build Glaze (macOS VST3 + AU)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'cursor/**' ]
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
