@@ -46,6 +46,11 @@ if (UNDERTOW_BUILD_TESTS)
     target_link_libraries(UndertowShot PRIVATE UndertowData juce::juce_audio_utils juce::juce_recommended_config_flags)
 endif()
 
+juce_add_gui_app(UndertowStage PRODUCT_NAME "Undertow" MICROPHONE_PERMISSION_ENABLED FALSE CAMERA_PERMISSION_ENABLED FALSE)
+target_sources(UndertowStage PRIVATE Tests/UndertowStage.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+target_compile_definitions(UndertowStage PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JucePlugin_Name="Undertow")
+target_link_libraries(UndertowStage PRIVATE UndertowData juce::juce_audio_utils juce::juce_recommended_config_flags)
+
 option(UNDERTOW_BUILD_DEMO "Build the offline video demo renderer" OFF)
 if (UNDERTOW_BUILD_DEMO)
     juce_add_console_app(UndertowDemo PRODUCT_NAME "UndertowDemo")
