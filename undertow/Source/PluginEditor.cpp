@@ -631,7 +631,7 @@ Content::Content (UndertowProcessor& p, const Fonts& f) : proc (p), fonts (f), s
         combos.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (st, id, c));
     };
     combo (key, "key"); combo (scale, "scale"); combo (octave, "octave"); combo (bars, "bars"); combo (chords, "chords"); combo (sound, "sound"); combo (playMode, "playMode");
-    kickGap.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
+    kickGap.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     addAndMakeVisible (kickGap);
     gapAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (st, "kickGap", kickGap);
     for (auto* b : { &generate, &mutate, &undo, &redo, &play, &kick, &lockR, &lockP, &exportB, &clear, &evolve, &keyIn }) addAndMakeVisible (*b);
@@ -745,7 +745,8 @@ void Content::paint (juce::Graphics& g)
     g.drawText ("brand-new bassline", 28, 754, 220, 14, juce::Justification::centred);
     g.drawText ("same groove, new notes", 240, 748, 132, 14, juce::Justification::centred);
     g.drawText ("keep these when you generate", 636, 748, 190, 14, juce::Justification::centred);
-    g.setColour (col::label); g.setFont (fonts.caps (9)); g.drawText ("PLAYBACK", 567, 76, 120, 12, juce::Justification::left);
+    g.setColour (col::label); g.setFont (fonts.caps (11.f)); g.drawText ("PLAYBACK", 560, 74, 90, 14, juce::Justification::left);
+    g.drawText ("GAP", 856, 74, 50, 14, juce::Justification::left);
 }
 
 void Content::resized()
@@ -756,7 +757,7 @@ void Content::resized()
     play.setBounds (912, 88, 44, 32);
     kick.setBounds (1094, 88, 70, 32);
     evolve.setBounds (560, 88, 88, 30); keyIn.setBounds (652, 88, 88, 30);
-    playMode.setBounds (744, 88, 108, 30); kickGap.setBounds (856, 90, 140, 26);
+    playMode.setBounds (744, 88, 100, 30); kickGap.setBounds (856, 102, 52, 14);
     slotBar.setBounds (578, 139, 250, 20);
     styles.setBounds (22, 152, 212, 492);
     roll.setBounds (266, 136, 634, 536);
