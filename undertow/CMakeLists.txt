@@ -34,6 +34,10 @@ target_link_libraries(Undertow
     PRIVATE UndertowData juce::juce_audio_utils
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
 
+# Generator invariants. No JUCE, so this can run anywhere the plugin builds.
+add_executable(UndertowGenTest Tests/GenTest.cpp)
+target_compile_features(UndertowGenTest PRIVATE cxx_std_17)
+
 option(UNDERTOW_BUILD_TESTS "Build offline test/screenshot tool" OFF)
 if (UNDERTOW_BUILD_TESTS)
     juce_add_console_app(UndertowShot PRODUCT_NAME "UndertowShot")

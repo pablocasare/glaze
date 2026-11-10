@@ -9,8 +9,11 @@ rm -rf "$VST3/Undertow.vst3" "$AU/Undertow.component"
 cp -R Undertow.vst3 "$VST3/"
 cp -R Undertow.component "$AU/"
 xattr -dr com.apple.quarantine "$VST3/Undertow.vst3" "$AU/Undertow.component" 2>/dev/null || true
+# AudioComponentRegistrar is macOS's Audio Unit cache. Restarting it makes the new AU show up
+# without a logout. It is not deleting anything.
 killall -9 AudioComponentRegistrar 2>/dev/null || true
 echo ""
 echo "  Undertow installed."
-echo "  In FL Studio: Options > Manage plugins > Find plugins, then look for Undertow."
+echo "  FL Studio: Options > Manage plugins > Find plugins, then look for Undertow."
+echo "  Ableton: Preferences > Plug-ins > Rescan. It appears under Plug-ins > Token Wise."
 echo ""

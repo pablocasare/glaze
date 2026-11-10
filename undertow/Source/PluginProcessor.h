@@ -15,22 +15,31 @@ inline const juce::StringArray soundNames { "Sub", "Rubber", "Reese", "Organ", "
 struct Voice
 {
     double sr = 44100;
-    double phase = 0, phase2 = 0, phase3 = 0, subPhase = 0, lfo = 0;
-    float pitchEnv = 0;
+    double phase = 0, phase2 = 0, phase3 = 0, subPhase = 0, lfo = 0, growl = 0;
+    float pitchEnv = 0, perc = 0;
     float freq = 55, target = 55, glideCoef = 1;
-    float amp = 0, ampTarget = 0, fenv = 0;
-    bool gate = false; int note = -1; float vel = 1;
-    float ic1 = 0, ic2 = 0; // SVF state
+    float amp = 0, fenv = 0;
+    bool gate = false, arm = false;
+    int note = -1, pendingNote = -1;
+    float vel = 1, pendingVel = 0;
+    float ic1 = 0, ic2 = 0, ic1R = 0, ic2R = 0; // SVF, left and right
+    float dcX = 0, dcY = 0, dcXR = 0, dcYR = 0;
     void noteOn (int n, float v, bool slide, float glideMs);
-    void noteOff (int n) { if (n == note) gate = false; }
-    void allOff() { gate = false; note = -1; }
-    float render (int sound, float cutoffOffset, float drive);
+    void noteOff (int n)
+    {
+        if (arm && n == pendingNote) { arm = false; pendingNote = -1; gate = false; return; }
+        if (n == note) gate = false;
+    }
+    void allOff() { gate = false; arm = false; pendingNote = -1; note = -1; }
+    void render (int sound, float cutoffOffset, float drive, float& left, float& right);
+    void startNow (int n, float v);
 };
 
 struct Kick
 {
     double sr = 44100, t = 1e9, ph = 0;
-    void trig() { t = 0; ph = 0; }
+    float tune = 49;
+    void trig (float hz) { t = 0; ph = 0; tune = hz; }
     float render();
 };
 }
@@ -132,8 +141,12 @@ private:
 
     ut::Voice voice; ut::Kick kick;
     double sr = 44100, internalPpq = 0; bool wasPlaying = false;
-    int sounding = -1;
+    int sounding = -1, soundingIdx = -1, preclosedIdx = -1;
     float duck = 1;
+    bool applyingFeel = false;
+    std::atomic<int> pendingSwingStyle { -1 };
+    std::atomic<bool> swingTouched { false };
+    std::array<uint8_t, 128> heldNotes {};
     double hostOffset = 0, lastHostEnd = -1; long long lastCycle = -1;
     std::atomic<bool> wrapped { false };
     std::atomic<int> pendingKey { -1 };

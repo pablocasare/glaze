@@ -228,7 +228,9 @@ juce::Rectangle<float> Roll::noteRect (const ut::Note& n) const
 {
     auto gA = gridArea(); const float rh = gA.getHeight() / (hi - lo + 1), sw = p.swing(), cw = gA.getWidth() / (p.bars() * 16);
     const float off = (n.step % 2) ? (sw - 0.5f) * 2.f * cw : 0.f;
-    const float x0 = xOfStep (n.step) + off + 1.f, x1 = xOfStep (n.step + n.len) - 1.f;
+    const int st = (int) p.p ("style");
+    const float pocket = ((n.step % 4) == 2 && (st == ut::Offbeat || st == ut::DeepTech || st == ut::Rolling || st == ut::Minimal)) ? -0.04f * cw : 0.f;
+    const float x0 = xOfStep (n.step) + off + pocket + 1.f, x1 = xOfStep (n.step + n.len) - 1.f;
     return { x0, gA.getY() + (hi - n.deg) * rh + 1.5f, std::max (5.f, x1 - x0), rh - 3.f };
 }
 int Roll::noteAt (juce::Point<float> pt) const
@@ -288,11 +290,12 @@ void Roll::paint (juce::Graphics& g)
         if (! compact) { g.setColour (col::dim); g.setFont (f.n (10)); g.drawText (rn, (int) x1 - 46, 38, 40, 16, juce::Justification::right); }
         if (bar > 0) { g.setColour (bar % 4 == 0 ? col::sigDim : col::screenBar); g.fillRect (x0, 36.f, 1.f, 20.f); }
     }
-    // kick row
+    // kick row follows the style: 4/4, 2-step or broken
     const bool kickOn = p.p ("kick") > 0.5f;
-    for (int bt = 0; bt < bars * 4; ++bt)
+    const int kickStyle = (int) p.p ("style");
+    for (int s = 0; s < steps; ++s) if (ut::isKickStep (kickStyle, s))
     {
-        const float x = xOfStep (bt * 4) + 2.5f;
+        const float x = xOfStep (s) + cw * 0.35f;
         g.setColour (kickOn ? col::sigDim : col::faint); g.fillEllipse (x - 2.5f, gA.getY() - 11, 5, 5);
     }
     g.setColour (col::dim); g.setFont (f.caps (8)); g.drawText ("KICK", 4, (int) gA.getY() - 15, (int) gA.getX() - 10, 12, juce::Justification::right);
@@ -617,7 +620,8 @@ void Content::paint (juce::Graphics& g)
     g.drawText ("TEMPO", 968, 76, 60, 12, juce::Justification::left);
     g.setColour (col::ink); g.setFont (fonts.n (17));
     g.drawText (juce::String (proc.bpm.load(), 1), 968, 90, 80, 24, juce::Justification::left);
-    g.setColour (col::dim); g.setFont (fonts.caps (8.5f)); g.drawText (proc.uiBeat.load() >= 0 ? "PLAYING" : "HOST SYNC", 1030, 97, 70, 12, juce::Justification::left);
+    g.setColour (col::dim); g.setFont (fonts.caps (8.5f));
+    g.drawText (proc.uiBeat.load() >= 0 ? "PLAYING" : "TRY " + juce::String (ut::styleBpm ((int) proc.p ("style"))), 1030, 97, 80, 12, juce::Justification::left);
     module (g, { 14, 128, 228, 552 }, "STYLE  (GROOVE TYPE)");
     module (g, { 252, 128, 662, 552 }, nullptr);
     module (g, { 924, 128, 242, 172 }, "SHAPE");
@@ -625,7 +629,8 @@ void Content::paint (juce::Graphics& g)
     module (g, { 924, 484, 242, 196 }, "SOUND");
     module (g, { 14, 690, 1152, 76 }, nullptr);
     g.setColour (col::dim); g.setFont (fonts.m (11.5f));
-    g.drawFittedText (ut::styleBlurb ((int) proc.p ("style")), 28, 650, 200, 22, juce::Justification::centredLeft, 1);
+    g.drawFittedText (juce::String (ut::styleBlurb ((int) proc.p ("style"))) + "   " + juce::String (ut::styleBpm ((int) proc.p ("style"))) + " BPM",
+                      28, 648, 200, 26, juce::Justification::centredLeft, 2);
     g.setColour (col::label); g.setFont (fonts.caps (9));
     g.drawText ("LOCK", 600, 722, 40, 12, juce::Justification::left);
     // what each control does, in plain words

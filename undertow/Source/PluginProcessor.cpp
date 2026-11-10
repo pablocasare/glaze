@@ -14,84 +14,160 @@ static inline float polyBlep (double t, double dt)
 void Voice::noteOn (int n, float v, bool slide, float glideMs)
 {
     target = 440.f * std::pow (2.f, (n - 69) / 12.f);
-    const bool legato = gate && slide;
-    if (legato) glideCoef = 1.f - std::exp (-1.f / (float) (std::max (5.f, glideMs) * 0.001f * sr));
-    else { freq = target; glideCoef = 1.f; fenv = 1.f; pitchEnv = 1.f; }
-    note = n; vel = v; gate = true;
-    // no hard amp reset on retrigger: the 22 ms release + 1.5 ms attack handle it without clicks
+    const bool legato = gate && slide && ! arm;
+    if (legato)
+    {
+        glideCoef = 1.f - std::exp (-1.f / (float) (std::max (5.f, glideMs) * 0.001f * sr));
+        note = n; vel = v; gate = true;
+        return;
+    }
+    pendingNote = n; pendingVel = v;
+    // fade the previous note out before the new one speaks, so a retrigger never clicks
+    if (amp > 0.025f) { arm = true; gate = false; }
+    else startNow (n, v);
 }
 
-float Voice::render (int sound, float cutOff, float drive)
+void Voice::startNow (int n, float v)
 {
-    // per-sound recipe: sub, saw, square, saw2 detune, base cutoff (Hz), reso, env amount (oct), env decay (s), drive
-    // pe: pitch drop at the start of each note in semitones (the 'boing' of a rubber bass)
-    struct R { float sub, saw, sq, det, cut, res, env, dec, drv, pe; };
+    freq = target; glideCoef = 1.f;
+    pitchEnv = 1.f; fenv = 0.f; perc = 1.f;
+    ic1 = ic2 = ic1R = ic2R = 0;
+    note = n; vel = v; gate = true; arm = false; pendingNote = -1;
+}
+
+static float warmSat (float x, float amount)
+{
+    const float g = 1.f + amount * 4.2f;
+    float y = x * g;
+    y += 0.16f * amount * y * std::abs (y); // a little even-harmonic warmth, not fizz
+    return std::tanh (y) / std::tanh (g * 0.72f);
+}
+static float svfLow (float x, float g, float k, float& ic1, float& ic2)
+{
+    const float a1 = 1.f / (1.f + g * (g + k)), a2 = g * a1, a3 = g * a2;
+    const float v3 = x - ic2, v1 = a1 * ic1 + a2 * v3, v2 = ic2 + a2 * ic1 + a3 * v3;
+    ic1 = 2.f * v1 - ic1; ic2 = 2.f * v2 - ic2;
+    if (std::abs (ic1) < 1e-15f) ic1 = 0; if (std::abs (ic2) < 1e-15f) ic2 = 0;
+    return v2;
+}
+
+void Voice::render (int sound, float cutOff, float drive, float& left, float& right)
+{
+    // sub, saw, square, detune, cutoff Hz, resonance, filter env (oct), env decay, drive, pitch drop (semitones),
+    // attack, release, output trim. Reese and Growl get a little stereo above the mono sub.
+    struct R { float sub, saw, sq, det, cut, res, env, dec, drv, pe, atk, rel, trim; int wide; };
     static const R rec[] = {
-        { 1.0f, 0.12f, 0.0f, 0.0f, 260, 0.2f, 1.2f, 0.10f, 0.15f, 0.0f },  // Sub
-        { 0.7f, 0.0f, 0.55f, 0.0f, 380, 0.45f, 3.2f, 0.09f, 0.35f, 5.0f }, // Rubber
-        { 0.6f, 0.55f, 0.0f, 0.12f, 650, 0.25f, 1.6f, 0.25f, 0.6f, 0.0f }, // Reese (3 drifting saws)
-        { 0.9f, 0.0f, 0.0f, 0.0f, 2200, 0.1f, 0.0f, 0.1f, 0.25f, 0.0f },   // Organ (additive below)
-        { 0.35f, 0.85f, 0.0f, 0.0f, 300, 0.85f, 4.2f, 0.16f, 0.5f, 0.0f }, // Acid
-        { 0.6f, 0.4f, 0.4f, 0.04f, 520, 0.5f, 2.5f, 0.14f, 0.9f, 2.0f } }; // Growl
+        { 1.00f, 0.00f, 0.00f, 0.00f,  170, 0.10f, 0.55f, 0.09f, 0.18f, 0.0f, 0.0040f, 0.050f, 0.90f, 0 }, // Sub
+        { 0.82f, 0.00f, 0.38f, 0.00f,  340, 0.50f, 3.30f, 0.075f, 0.32f, 7.0f, 0.0012f, 0.020f, 0.78f, 0 }, // Rubber
+        { 0.62f, 0.52f, 0.00f, 0.018f, 460, 0.22f, 1.15f, 0.26f, 0.38f, 0.0f, 0.0060f, 0.055f, 0.62f, 1 }, // Reese
+        { 0.95f, 0.00f, 0.00f, 0.00f, 1400, 0.06f, 0.25f, 0.14f, 0.16f, 0.0f, 0.0030f, 0.070f, 0.70f, 0 }, // Organ
+        { 0.28f, 0.82f, 0.00f, 0.00f,  190, 0.74f, 4.60f, 0.15f, 0.42f, 0.0f, 0.0018f, 0.026f, 0.58f, 0 }, // Acid
+        { 0.55f, 0.42f, 0.32f, 0.010f, 400, 0.46f, 2.10f, 0.16f, 0.55f, 2.2f, 0.0035f, 0.034f, 0.55f, 1 } }; // Growl
     const R& r = rec[juce::jlimit (0, 5, sound)];
 
-    freq += (target - freq) * glideCoef;
-    pitchEnv *= std::exp (-1.f / (0.028f * (float) sr));
-    const double dt = freq * (r.pe > 0 ? std::pow (2.0, r.pe * pitchEnv / 12.0) : 1.0) / sr;
-    lfo += 0.13 / sr; if (lfo >= 1) lfo -= 1;
-    const double drift = 1.0 + 0.35 * std::sin (juce::MathConstants<double>::twoPi * lfo); // slow detune drift
-    phase += dt; if (phase >= 1) phase -= 1;
-    phase2 += dt * (1.0 + r.det * 0.06 * drift); if (phase2 >= 1) phase2 -= 1;
-    phase3 += dt * (1.0 - r.det * 0.045 * drift); if (phase3 >= 1) phase3 -= 1;
-    subPhase += dt; if (subPhase >= 1) subPhase -= 1;
-
-    float x = r.sub * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase);
-    if (sound == 0) x += 0.12f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2);
-    if (r.saw > 0)
+    if (arm)
     {
-        float s = (float) (2 * phase - 1) - polyBlep (phase, dt);
-        if (r.det > 0) s = 0.4f * (s + (float) (2 * phase2 - 1) - polyBlep (phase2, dt * (1.0 + r.det * 0.06)))
-                         + (sound == 2 ? 0.35f * ((float) (2 * phase3 - 1) - polyBlep (phase3, dt)) : 0.f);
-        x += r.saw * s;
+        amp *= std::exp (-1.f / (0.0004f * (float) sr));
+        if (amp < 0.02f && pendingNote >= 0) startNow (pendingNote, pendingVel);
     }
-    if (r.sq > 0)
+
+    const float atk = gate ? (1.f - std::exp (-1.f / (r.atk * (float) sr))) : (1.f - std::exp (-1.f / (r.rel * (float) sr)));
+    amp += ((gate ? 1.f : 0.f) - amp) * atk;
+    if (! gate && amp < 1.0e-5f && ! arm)
     {
-        float q = phase < 0.5 ? 1.f : -1.f;
-        q += polyBlep (phase, dt); double p2 = phase + 0.5; if (p2 >= 1) p2 -= 1; q -= polyBlep (p2, dt);
-        x += r.sq * q;
+        amp = 0; ic1 = ic2 = ic1R = ic2R = 0; left = right = 0; return;
     }
-    if (sound == 3) // organ: drawbar-ish 2nd + 3rd harmonic
-        x += 0.35f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2) + 0.18f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 3);
 
-    // envelopes
-    ampTarget = gate ? 1.f : 0.f;
-    const float aC = gate ? (1.f - std::exp (-1.f / (0.0015f * (float) sr))) : (1.f - std::exp (-1.f / (0.022f * (float) sr)));
-    amp += (ampTarget - amp) * aC;
-    fenv *= std::exp (-1.f / (r.dec * (float) sr));
+    if (glideCoef < 0.999f)
+    {
+        const float st = 12.f * std::log2 (std::max (20.f, freq) / 440.f);
+        const float stT = 12.f * std::log2 (std::max (20.f, target) / 440.f);
+        freq = 440.f * std::pow (2.f, (st + (stT - st) * glideCoef) / 12.f);
+    }
+    else freq = target;
+    pitchEnv *= std::exp (-1.f / (0.032f * (float) sr));
+    fenv += ((gate && fenv < 0.98f ? 1.f : 0.f) - fenv) * (fenv < 0.98f && gate ? (1.f - std::exp (-1.f / (0.0025f * (float) sr))) : 0.f);
+    if (! (gate && fenv < 0.98f)) fenv *= std::exp (-1.f / (r.dec * (float) sr));
+    perc *= std::exp (-1.f / (0.045f * (float) sr));
+    lfo += 0.18 / sr; if (lfo >= 1) lfo -= 1;
+    growl += (sound == 5 ? 31.0 : 0.0) / sr; if (growl >= 1) growl -= 1;
 
-    // filter (Cytomic SVF lowpass)
-    float fc = r.cut * std::pow (2.f, cutOff * 2.5f + r.env * fenv * (0.5f + 0.5f * vel));
-    fc = juce::jlimit (30.f, (float) sr * 0.45f, fc);
-    const float g = std::tan (juce::MathConstants<float>::pi * fc / (float) sr);
-    const float k = 2.f - 1.9f * r.res;
-    const float a1 = 1 / (1 + g * (g + k)), a2 = g * a1, a3 = g * a2;
-    const float v3 = x - ic2, v1 = a1 * ic1 + a2 * v3, v2 = ic2 + a2 * ic1 + a3 * v3;
-    ic1 = 2 * v1 - ic1; ic2 = 2 * v2 - ic2;
-    float y = v2;
-    const float d = 1.f + (r.drv + drive) * 4.f;
-    y = std::tanh (y * d) / std::tanh (d) * 0.9f;
-    return y * amp * (0.55f + 0.45f * vel);
+    const double play = freq * (r.pe > 0 ? std::pow (2.0, r.pe * (double) pitchEnv / 12.0) : 1.0);
+    const double os = sr * 2.0;
+    const double dt = play / os;
+    const double drift = 0.35 * std::sin (juce::MathConstants<double>::twoPi * lfo);
+    const float wob = sound == 5 ? (1.f + 0.30f * (float) std::sin (juce::MathConstants<double>::twoPi * growl)) : 1.f;
+    float fc = r.cut * wob * std::pow (2.f, cutOff * 2.4f + r.env * fenv * (0.45f + 0.55f * vel));
+    fc = juce::jlimit (28.f, (float) sr * 0.36f, fc);
+    const float g = std::tan (juce::MathConstants<float>::pi * fc / (float) os);
+    const float k = 2.f - 1.82f * r.res;
+    const float satAmt = juce::jlimit (0.f, 1.6f, r.drv + drive * 0.85f);
+
+    float accL = 0, accR = 0;
+    for (int step = 0; step < 2; ++step)
+    {
+        auto wrap = [] (double& p, double inc) { p += inc; while (p >= 1.0) p -= 1.0; while (p < 0) p += 1.0; };
+        wrap (subPhase, dt);
+        wrap (phase, dt);
+        const double d1 = 1.0 + (double) r.det * (1.15 + drift);
+        const double d2 = 1.0 - (double) r.det * (0.92 + drift * 0.8);
+        wrap (phase2, dt * d1);
+        wrap (phase3, dt * d2);
+
+        const float sub = (float) std::sin (juce::MathConstants<double>::twoPi * subPhase);
+        float mono = r.sub * sub;
+        if (sound == 0) mono += 0.07f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2.0); // a little warmth, still a sub
+        if (sound == 3)
+        {
+            mono += 0.40f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2.0);
+            mono += 0.18f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 3.0);
+            mono += 0.07f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 4.0);
+            mono += 0.22f * perc * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2.0); // key click, short and dark
+        }
+        auto sawAt = [&] (double p, double inc) { return (float) (2.0 * p - 1.0) - polyBlep (p, inc); };
+        auto squareAt = [&] (double p, double inc) {
+            float q = p < 0.5 ? 1.f : -1.f;
+            q += polyBlep (p, inc);
+            double p2 = p + 0.5; if (p2 >= 1.0) p2 -= 1.0;
+            q -= polyBlep (p2, inc);
+            return q;
+        };
+        float side = 0;
+        if (r.saw > 0)
+        {
+            const float s1 = sawAt (phase, dt);
+            if (r.wide)
+            {
+                const float s2 = sawAt (phase2, dt * d1), s3 = sawAt (phase3, dt * d2);
+                mono += r.saw * (0.40f * s1 + 0.32f * s2 + 0.28f * s3);
+                side = 0.20f * (s2 - s3);
+            }
+            else mono += r.saw * s1;
+        }
+        if (r.sq > 0) mono += r.sq * squareAt (phase, dt);
+
+        const float m = warmSat (svfLow (mono, g, k, ic1, ic2), satAmt);
+        const float sd = r.wide ? warmSat (svfLow (side, g, k, ic1R, ic2R), satAmt * 0.5f) : 0.f;
+        accL += m + sd; accR += m - sd;
+    }
+
+    const float gain = r.trim * amp * (0.62f + 0.38f * vel);
+    auto dc = [] (float x, float& px, float& py) {
+        const float y = x - px + 0.995f * py; px = x; py = y; return y;
+    };
+    left = dc (accL * 0.5f * gain, dcX, dcY);
+    right = dc (accR * 0.5f * gain, dcXR, dcYR);
 }
 
 float Kick::render()
 {
-    if (t > 0.5) return 0.f;
-    const double f = 48 + 120 * std::exp (-t / 0.035);
+    if (t > 0.40) return 0.f;
+    const double f = tune + tune * 2.6 * std::exp (-t / 0.030);
     ph += f / sr;
-    float y = (float) std::sin (juce::MathConstants<double>::twoPi * ph) * (float) std::exp (-t / 0.22);
-    y += (t < 0.003 ? 0.4f * (float) (1 - t / 0.003) : 0.f);
+    float y = (float) std::sin (juce::MathConstants<double>::twoPi * ph) * (float) std::exp (-t / 0.20);
+    y += (t < 0.0025 ? 0.28f * (float) (1.0 - t / 0.0025) : 0.f);
     t += 1.0 / sr;
-    return std::tanh (1.6f * y) * 0.7f;
+    return std::tanh (1.5f * y) * 0.62f;
 }
 
 // ---------------------------------------------------------------- processor
@@ -119,7 +195,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout layout()
     pct ("gate", "Length", 0.8f);
     pct ("ghosts", "Ghost Notes", 0.3f);
     pct ("accent", "Accent", 0.5f);
-    v.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "swing", 1 }, "Swing", NormalisableRange<float> (0.5f, 0.75f), 0.56f,
+    v.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "swing", 1 }, "Swing", NormalisableRange<float> (0.5f, 0.75f), 0.53f,
         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return String (roundToInt (x * 100)) + "%"; })));
     v.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "glide", 1 }, "Glide", NormalisableRange<float> (5, 250, 0, 0.6f), 60,
         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float x, int) { return String (roundToInt (x)) + " ms"; })));
@@ -152,9 +228,11 @@ UndertowProcessor::UndertowProcessor()
 UndertowProcessor::~UndertowProcessor() { for (auto* id : genIds) apvts.removeParameterListener (id, this); }
 
 // key, scale, octave, swing and length only change how the notes play, so they never throw away hand edits
-void UndertowProcessor::parameterChanged (const juce::String& id, float)
+void UndertowProcessor::parameterChanged (const juce::String& id, float value)
 {
-    if (! applyingPreset) presetModified = true;
+    if (! applyingPreset && ! applyingFeel) presetModified = true;
+    if (id == "swing" && ! applyingFeel && ! applyingPreset) swingTouched = true;
+    if (id == "style" && ! applyingPreset) { swingTouched = false; pendingSwingStyle = (int) value; }
     if (id == "key" || id == "scale" || id == "octave" || id == "swing" || id == "gate") renderDirty = true;
     else dirty = true;
 }
@@ -163,22 +241,24 @@ const std::vector<UndertowProcessor::Preset>& UndertowProcessor::presets()
 {
     using namespace ut;
     static const std::vector<Preset> P {
-        { "Night Roller",       Rolling,     Minor,     ChordAuto,         .65f, .40f, .30f, .80f, .56f,  60, .30f, .50f, 1,  .00f, .20f },
-        { "Warehouse Driver",   Driving,     Minor,     ChordStay,         .70f, .30f, .20f, .60f, .52f,  40, .20f, .60f, 5,  .10f, .40f },
-        { "Offbeat Classic",    Offbeat,     Dorian,    ChordI_VII,        .50f, .35f, .25f, .85f, .54f,  60, .15f, .45f, 3,  .00f, .15f },
-        { "Bouncy Tech",        Bouncy,      Minor,     ChordI_VI,         .55f, .50f, .35f, .50f, .56f,  50, .35f, .60f, 1,  .15f, .25f },
-        { "Garage Swing",       TwoStep,     Minor,     ChordI_VI_VII,     .60f, .50f, .35f, .85f, .66f,  90, .30f, .55f, 2,  .00f, .35f },
-        { "Minimal Hypnosis",   Minimal,     Phrygian,  ChordStay,         .40f, .20f, .20f, .60f, .58f,  40, .25f, .40f, 0, -.10f, .10f },
-        { "Off The Grid",       Broken,      Minor,     ChordI_iv,         .60f, .55f, .45f, .60f, .57f,  60, .35f, .55f, 1,  .10f, .30f },
-        { "Squelch 303",        Acid,        Phrygian,  ChordStay,         .70f, .60f, .40f, .70f, .54f,  70, .20f, .70f, 4,  .20f, .45f },
-        { "Speed Wobble",       SpeedGarage, Minor,     ChordI_VII,        .65f, .50f, .35f, .80f, .60f,  80, .25f, .55f, 2,  .10f, .50f },
-        { "Tresillo Sun",       Afro,        Dorian,    ChordI_iv,         .55f, .45f, .30f, .75f, .55f,  50, .35f, .50f, 0,  .05f, .15f },
-        { "Deep Undertow",      DeepTech,    Minor,     ChordI_VI,         .45f, .35f, .25f, .95f, .56f, 120, .20f, .40f, 0, -.15f, .20f },
-        { "Bassline Bounce",    Bassline,    Minor,     ChordI_iv_VI_V,    .65f, .55f, .30f, .55f, .52f,  50, .25f, .65f, 5,  .20f, .45f },
-        { "Late Night Reese",   Rolling,     HarmMinor, ChordI_VI_VII,     .55f, .55f, .35f, .90f, .56f, 100, .25f, .50f, 2,  .00f, .30f },
-        { "Sub Pressure",       Offbeat,     Minor,     ChordStay,         .45f, .20f, .20f, .90f, .53f,  40, .10f, .40f, 0, -.20f, .10f },
-        { "Jackin Organ",       Bouncy,      Dorian,    ChordI_VII,        .60f, .45f, .35f, .55f, .58f,  50, .30f, .60f, 3,  .10f, .20f },
-        { "Tunnel Vision",      Driving,     Phrygian,  ChordI_VI,         .75f, .40f, .30f, .50f, .53f,  40, .35f, .70f, 4, -.10f, .50f } };
+        { "Night Roller",       Rolling,     Minor,       ChordAuto,         .62f, .35f, .18f, .78f, .53f,  55, .28f, .50f, 1,  .00f, .18f },
+        { "Warehouse Driver",   Driving,     Minor,       ChordStay,         .82f, .28f, .15f, .62f, .51f,  35, .18f, .62f, 5,  .05f, .38f },
+        { "Offbeat Classic",    Offbeat,     Dorian,      ChordI_VII,        .42f, .30f, .12f, .88f, .54f,  50, .12f, .42f, 3, -.05f, .12f },
+        { "Bouncy Tech",        Bouncy,      Minor,       ChordI_VI,         .55f, .48f, .28f, .48f, .54f,  45, .32f, .58f, 1,  .12f, .24f },
+        { "Garage Swing",       TwoStep,     Minor,       ChordI_VI_VII,     .58f, .42f, .22f, .92f, .60f,  95, .22f, .48f, 2, -.05f, .28f },
+        { "Minimal Hypnosis",   Minimal,     Phrygian,    ChordStay,         .38f, .18f, .08f, .72f, .53f,  40, .18f, .36f, 0, -.12f, .08f },
+        { "Off The Grid",       Broken,      Minor,       ChordI_iv,         .58f, .50f, .35f, .64f, .54f,  55, .30f, .52f, 1,  .08f, .26f },
+        { "Squelch 303",        Acid,        Phrygian,    ChordStay,         .68f, .55f, .32f, .70f, .54f,  65, .15f, .72f, 4,  .15f, .40f },
+        { "Speed Wobble",       SpeedGarage, Minor,       ChordI_VII,        .55f, .40f, .18f, .90f, .59f,  85, .18f, .50f, 2,  .00f, .42f },
+        { "Tresillo Sun",       Afro,        Dorian,      ChordI_iv,         .52f, .40f, .20f, .78f, .55f,  48, .30f, .48f, 0,  .02f, .14f },
+        { "Deep Undertow",      DeepTech,    Minor,       ChordI_VI,         .42f, .22f, .10f, .96f, .54f, 110, .16f, .38f, 0, -.18f, .16f },
+        { "Bassline Bounce",    Bassline,    Minor,       ChordI_iv_VI_V,    .60f, .35f, .18f, .52f, .55f,  48, .20f, .60f, 5,  .12f, .40f },
+        { "Late Night Reese",   Rolling,     HarmMinor,   ChordI_VI_VII,     .55f, .48f, .25f, .90f, .53f, 100, .22f, .46f, 2, -.05f, .30f },
+        { "Sub Pressure",       Offbeat,     Minor,       ChordStay,         .40f, .15f, .08f, .92f, .53f,  35, .08f, .36f, 0, -.22f, .10f },
+        { "Jackin Organ",       Bouncy,      Mixolydian,  ChordI_VII,        .58f, .42f, .22f, .58f, .55f,  48, .28f, .55f, 3,  .08f, .18f },
+        { "Tunnel Vision",      Driving,     Phrygian,    ChordI_VI,         .90f, .32f, .20f, .48f, .51f,  32, .30f, .68f, 4, -.08f, .48f },
+        { "Penthouse",          Rolling,     MinorPent,   ChordStay,         .55f, .22f, .10f, .84f, .53f,  50, .20f, .44f, 0, -.12f, .12f },
+        { "Disco Organ",        Offbeat,     Mixolydian,  ChordI_VII,        .46f, .38f, .15f, .90f, .55f,  42, .12f, .40f, 3,  .04f, .14f } };
     return P;
 }
 
@@ -188,6 +268,7 @@ void UndertowProcessor::applyPreset (int index)
     index = (index % (int) L.size() + (int) L.size()) % (int) L.size();
     const auto& P = L[(size_t) index];
     pushHistory();
+    pendingSwingStyle = -1;
     applyingPreset = true;
     auto set = [&] (const char* id, float v) { if (auto* q = apvts.getParameter (id)) { q->beginChangeGesture(); q->setValueNotifyingHost (q->convertTo0to1 (v)); q->endChangeGesture(); } };
     set ("style", (float) P.style); set ("scale", (float) P.scale); set ("chords", (float) P.chords);
@@ -232,6 +313,7 @@ void UndertowProcessor::recallSlot (int i)
 {
     const auto& s = slots[(size_t) i]; if (! s.used) return;
     pushHistory();
+    pendingSwingStyle = -1;
     applyingPreset = true;
     for (auto& [id, v] : s.params) if (auto* q = apvts.getParameter (id)) { q->beginChangeGesture(); q->setValueNotifyingHost (v); q->endChangeGesture(); }
     applyingPreset = false;
@@ -297,19 +379,20 @@ void UndertowProcessor::regenerate()
 void UndertowProcessor::rebuildEvents()
 {
     events.clear();
-    const float sw = swing(); const int root = rootMidi(), sc = scale();
+    const float sw = swing(); const int root = rootMidi(), sc = scale(), style = (int) p ("style");
+    const float gate = p ("gate");
     loopBeats = bars() * 4.0;
-    auto beatOf = [&] (int step) { return step * 0.25 + ((step % 2) ? (sw - 0.5) * 0.5 : 0.0); };
     for (size_t i = 0; i < pattern.size(); ++i)
     {
         const auto& n = pattern[i];
         const int midi = juce::jlimit (0, 127, root + degToSemi (n.deg, sc));
-        const float gk = 0.3f + 0.67f * p ("gate");
-        double on = beatOf (n.step), off = on + std::max (0.06, (beatOf (n.step + n.len) - on) * gk - 0.01);
         const bool legatoNext = i + 1 < pattern.size() && pattern[i + 1].slide && pattern[i + 1].step == n.step + n.len;
-        if (legatoNext) off = beatOf (n.step + n.len) + 0.02; // overlap so the next note glides
+        const double on = noteOnBeat (n.step, sw, style);
+        double off = noteOffBeat (n.step, n.len, sw, gate, style, legatoNext);
+        if (off < on + 0.02) off = on + 0.02;
         events.push_back ({ on, true, midi, n.vel, n.slide, (int) i });
-        events.push_back ({ std::fmod (off, loopBeats), false, midi, 0, false, (int) i });
+        const double wrapped = std::fmod (off, loopBeats);
+        events.push_back ({ wrapped < 0 ? wrapped + loopBeats : wrapped, false, midi, 0, false, (int) i });
     }
     std::sort (events.begin(), events.end(), [] (const Ev& a, const Ev& b) { return a.beat < b.beat || (a.beat == b.beat && ! a.on && b.on); });
 }
@@ -319,6 +402,14 @@ void UndertowProcessor::timerCallback()
     // EVOLVE: every time the pattern comes around, play a new take on it (same hook, new variations + fills)
     const int pk = pendingKey.exchange (-1);
     if (pk >= 0 && pk != (int) p ("key")) if (auto* q = apvts.getParameter ("key")) { q->beginChangeGesture(); q->setValueNotifyingHost (q->convertTo0to1 ((float) pk)); q->endChangeGesture(); }
+    const int swingStyle = pendingSwingStyle.exchange (-1);
+    if (swingStyle >= 0 && ! swingTouched.load())
+    {
+        applyingFeel = true;
+        if (auto* q = apvts.getParameter ("swing"))
+            q->setValueNotifyingHost (q->convertTo0to1 (styleSwing (juce::jlimit (0, NumStyles - 1, swingStyle))));
+        applyingFeel = false;
+    }
     if (wrapped.exchange (false) && p ("evolve") > 0.5f && ! edited && bars() > 1) { seeds.take++; dirty = true; }
     if (dirty.exchange (false)) { renderDirty = false; regenerate(); }
     else if (renderDirty.exchange (false)) { { const juce::SpinLock::ScopedLockType l (patLock); rebuildEvents(); } patternVersion++; }
@@ -355,7 +446,19 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
     juce::ScopedNoDenormals nd;
     const int n = buf.getNumSamples();
     buf.clear();
-    if (p ("keyIn") > 0.5f) for (const auto md : midi) if (md.getMessage().isNoteOn()) pendingKey = md.getMessage().getNoteNumber() % 12;
+    for (const auto md : midi)
+    {
+        const auto msg = md.getMessage();
+        if (msg.isAllNotesOff() || msg.isAllSoundOff()) heldNotes.fill (0);
+        else if (msg.isNoteOn()) heldNotes[(size_t) msg.getNoteNumber()] = 1;
+        else if (msg.isNoteOff()) heldNotes[(size_t) msg.getNoteNumber()] = 0;
+    }
+    if (p ("keyIn") > 0.5f)
+    {
+        int low = -1;
+        for (int i = 0; i < 128; ++i) if (heldNotes[(size_t) i]) { low = i; break; }
+        if (low >= 0) pendingKey = low % 12;
+    }
     midi.clear();
 
     double hostBpm = 128; bool hostPlaying = false; double ppq = 0;
@@ -392,7 +495,7 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
 
     if (! playing)
     {
-        if (wasPlaying) { if (sounding >= 0) midi.addEvent (juce::MidiMessage::noteOff (1, sounding), 0); voice.allOff(); sounding = -1; }
+        if (wasPlaying) { if (sounding >= 0) midi.addEvent (juce::MidiMessage::noteOff (1, sounding), 0); voice.allOff(); sounding = -1; soundingIdx = -1; preclosedIdx = -1; }
         wasPlaying = false; uiBeat = -1;
     }
     wasPlaying = playing;
@@ -401,55 +504,75 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
     const float gain = juce::Decibels::decibelsToGain (p ("volume"));
     const bool kickOn = p ("kick") > 0.5f, muted = p ("mute") > 0.5f;
 
-    // gather events for this block
+    // gather events for this block. Fixed arrays: this runs on the audio thread.
     struct Hit { int off; const Ev* e; };
+    Hit hits[160]; int nHits = 0;
+    int kickAt[48]; int nKicks = 0;
     juce::SpinLock::ScopedTryLockType lock (patLock);
-    std::vector<Hit> hits; hits.reserve (32);
-    std::vector<int> kicks;
+    const int styleNow = (int) p ("style");
     if (playing && lock.isLocked() && loopBeats > 0)
     {
         const double p0 = ppq, p1 = ppq + n * bps;
         for (auto& e : events)
         {
             double k = std::ceil ((p0 - e.beat) / loopBeats);
-            for (double t = e.beat + k * loopBeats; t < p1; t += loopBeats)
-                hits.push_back ({ juce::jlimit (0, n - 1, (int) ((t - p0) / bps)), &e });
+            for (double t = e.beat + k * loopBeats; t < p1 && nHits < 160; t += loopBeats)
+                hits[nHits++] = { juce::jlimit (0, n - 1, (int) ((t - p0) / bps)), &e };
         }
-        for (double b = std::ceil (p0); b < p1; b += 1) kicks.push_back (juce::jlimit (0, n - 1, (int) ((b - p0) / bps)));
-        std::stable_sort (hits.begin(), hits.end(), [] (const Hit& a, const Hit& b) { return a.off < b.off; });
-        uiBeat = (float) std::fmod (p0, loopBeats);
+        if (p1 > p0)
+            for (double s = std::ceil (p0 * 4.0); s < p1 * 4.0 - 1.0e-9 && nKicks < 48; s += 1.0)
+            {
+                const double beat = s * 0.25;
+                if (beat < p0 - 1.0e-6 || beat >= p1) continue;
+                const int si = (int) std::llround (s);
+                if (si >= 0 && isKickStep (styleNow, si))
+                    kickAt[nKicks++] = juce::jlimit (0, n - 1, (int) ((beat - p0) / bps));
+            }
+        std::stable_sort (hits, hits + nHits, [] (const Hit& a, const Hit& b) { return a.off < b.off; });
+        uiBeat = (float) std::fmod (p0 < 0 ? p0 + loopBeats * std::ceil (-p0 / loopBeats) : p0, loopBeats);
     }
 
-    auto* L = buf.getWritePointer (0); auto* R = buf.getNumChannels() > 1 ? buf.getWritePointer (1) : nullptr;
-    size_t hi = 0, ki = 0; float peak = 0;
+    auto* Lch = buf.getWritePointer (0); auto* Rch = buf.getNumChannels() > 1 ? buf.getWritePointer (1) : nullptr;
+    int hi = 0, ki = 0; float peak = 0;
+    float kickHz = 49.f;
+    if (kickOn)
+    {
+        kickHz = 440.f * std::pow (2.f, (rootMidi() - 69) / 12.f);
+        while (kickHz < 45.f) kickHz *= 2.f;
+        while (kickHz > 64.f) kickHz *= 0.5f;
+    }
     for (int i = 0; i < n; ++i)
     {
-        while (hi < hits.size() && hits[hi].off <= i)
+        while (hi < nHits && hits[hi].off <= i)
         {
             const Ev& e = *hits[hi].e;
             if (e.on)
             {
-                if (sounding >= 0 && sounding != e.note) midi.addEvent (juce::MidiMessage::noteOff (1, sounding), i);
+                // a slide overlaps the note it leaves, so a mono synth downstream actually glides
+                if (sounding >= 0 && ! e.slide) { midi.addEvent (juce::MidiMessage::noteOff (1, sounding), i); preclosedIdx = soundingIdx; }
                 midi.addEvent (juce::MidiMessage::noteOn (1, e.note, (juce::uint8) e.vel), i);
                 voice.noteOn (e.note, e.vel / 127.f, e.slide, glide);
-                sounding = e.note; uiNoteIdx = e.idx;
+                sounding = e.note; soundingIdx = e.idx; uiNoteIdx = e.idx;
             }
-            else if (e.note == sounding)
+            else
             {
-                midi.addEvent (juce::MidiMessage::noteOff (1, e.note), i);
-                voice.noteOff (e.note); sounding = -1;
+                if (e.idx != preclosedIdx) midi.addEvent (juce::MidiMessage::noteOff (1, e.note), i);
+                if (e.idx == preclosedIdx) preclosedIdx = -1;
+                if (e.idx == soundingIdx) { voice.noteOff (e.note); sounding = -1; soundingIdx = -1; }
             }
             ++hi;
         }
-        while (ki < kicks.size() && kicks[ki] <= i) { if (kickOn) kick.trig(); duck = 0.25f; ++ki; }
-        duck += (1.f - duck) * 0.0009f * (44100.f / (float) sr);
-        float b = muted ? 0.f : voice.render (sound, tone, drv) * gain;
-        if (kickOn) b *= duck;
-        const float k = kickOn ? kick.render() * 0.5f : 0.f;
-        const float y = b + k;
-        L[i] = y; if (R) R[i] = y;
-        peak = std::max (peak, std::abs (b));
-        if ((i & 1) == 0) { const int w = scopeW.load (std::memory_order_relaxed); scope[(size_t) w] = b; scopeW.store ((w + 1) & 1023, std::memory_order_relaxed); }
+        while (ki < nKicks && kickAt[ki] <= i) { if (kickOn) { kick.trig (kickHz); duck = 0.22f; } ++ki; }
+        duck += (1.f - duck) * 0.00085f * (44100.f / (float) std::max (1.0, sr));
+        float ls = 0, rs = 0;
+        voice.render (sound, tone, drv, ls, rs); // keep the voice moving while muted, so unmute doesn't click
+        if (muted) ls = rs = 0;
+        else { ls *= gain; rs *= gain; }
+        if (kickOn) { ls *= duck; rs *= duck; }
+        const float k = kickOn ? kick.render() * 0.42f : 0.f;
+        Lch[i] = ls + k; if (Rch) Rch[i] = rs + k;
+        peak = std::max (peak, std::abs (ls));
+        if ((i & 1) == 0) { const int w = scopeW.load (std::memory_order_relaxed); scope[(size_t) w] = ls; scopeW.store ((w + 1) & 1023, std::memory_order_relaxed); }
     }
     uiLevel = std::max (peak, uiLevel.load() * 0.9f);
     if (internal) internalPpq += n * bps;
@@ -473,8 +596,8 @@ bool UndertowProcessor::writeMidi (const juce::File& f, int takes) const
     const int tpq = 960; juce::MidiMessageSequence seq;
     seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) (60000000.0 / bpm.load())), 0);
     seq.addEvent (juce::MidiMessage::textMetaEvent (3, "Undertow Bass"), 0);
-    const float sw = swing(); const int root = rootMidi(), sc = scale();
-    auto beatOf = [&] (int step) { return step * 0.25 + ((step % 2) ? (sw - 0.5) * 0.5 : 0.0); };
+    const float sw = swing(); const int root = rootMidi(), sc = scale(), style = (int) p ("style");
+    const float gateAmt = p ("gate");
     // takes > 1: the current take, then the next EVOLVE takes after it, back to back
     auto pat = getPattern();
     if (takes > 1)
@@ -489,10 +612,11 @@ bool UndertowProcessor::writeMidi (const juce::File& f, int takes) const
     for (size_t i = 0; i < pat.size(); ++i)
     {
         const auto& nn = pat[i]; const int m = juce::jlimit (0, 127, root + degToSemi (nn.deg, sc));
-        const double on = beatOf (nn.step) * tpq;
-        const float gk = 0.3f + 0.67f * p ("gate");
-        double off = (beatOf (nn.step) + std::max (0.06, (beatOf (nn.step + nn.len) - beatOf (nn.step)) * gk - 0.01)) * tpq;
-        if (i + 1 < pat.size() && pat[i + 1].slide && pat[i + 1].step == nn.step + nn.len) off = (beatOf (nn.step + nn.len) + 0.02) * tpq;
+        const bool legatoNext = i + 1 < pat.size() && pat[i + 1].slide && pat[i + 1].step == nn.step + nn.len;
+        const double onBeat = noteOnBeat (nn.step, sw, style);
+        double offBeat = noteOffBeat (nn.step, nn.len, sw, gateAmt, style, legatoNext);
+        if (offBeat < onBeat + 0.02) offBeat = onBeat + 0.02;
+        const double on = onBeat * tpq, off = offBeat * tpq;
         seq.addEvent (juce::MidiMessage::noteOn (1, m, (juce::uint8) nn.vel), on);
         seq.addEvent (juce::MidiMessage::noteOff (1, m), off);
     }
@@ -567,6 +691,7 @@ void UndertowProcessor::setStateInformation (const void* d, int s)
         }
         currentSlot = sl.getProperty ("current", -1);
         st.removeChild (sl, nullptr);
+        pendingSwingStyle = -1;
         applyingPreset = true; apvts.replaceState (st); applyingPreset = false;
         edited = false;
         regenerate();
