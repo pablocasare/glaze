@@ -9,7 +9,7 @@ namespace col
     // graphite hardware, one signal colour
     const juce::Colour bg { 0xff121417 }, chassis { 0xff181b1f }, module { 0xff1d2125 }, moduleHi { 0xff23282d }, edge { 0xff2c3137 }, edgeDark { 0xff0a0b0d },
         screen { 0xff0b0d0f }, screenLine { 0xff1a1e22 }, screenBeat { 0xff22272c }, screenBar { 0xff323940 },
-        sig { 0xffc8e45a }, sigDim { 0xff6f8132 }, sigDeep { 0xff2b3417 },
+        sig { 0xffb8ff3c }, sigDim { 0xff6d9a22 }, sigDeep { 0xff1c2e0c },
         ink { 0xffe8eaed }, label { 0xff8a919a }, dim { 0xff5a6169 }, faint { 0xff3a4046 }, warn { 0xffe7a04a };
 }
 struct Fonts
@@ -56,12 +56,17 @@ struct Btn : juce::Button
     void paintButton (juce::Graphics&, bool over, bool down) override;
 };
 
-struct StyleList : juce::Component
+struct StyleList : juce::Component, public juce::SettableTooltipClient
 {
     UndertowProcessor& p; const Fonts& f; int hover = -1;
     StyleList (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) {}
     void paint (juce::Graphics&) override;
-    void mouseMove (const juce::MouseEvent& e) override { const int h = rowAt (e.y); if (h != hover) { hover = h; repaint(); } }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const int h = rowAt (e.y);
+        if (h >= 0) setTooltip (juce::String (ut::styleName (h)) + "  —  " + ut::styleBlurb (h) + "   Try " + juce::String (ut::styleBpm (h)) + " BPM");
+        if (h != hover) { hover = h; repaint(); }
+    }
     void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
     void mouseDown (const juce::MouseEvent& e) override;
     int rowAt (int y) const { return juce::jlimit (-1, ut::NumStyles - 1, y / rowH()); }
@@ -76,12 +81,15 @@ struct PresetBar : juce::Component
     void mouseDown (const juce::MouseEvent&) override;
 };
 
-struct Roll : juce::Component
+struct Roll : juce::Component, public juce::SettableTooltipClient
 {
     UndertowProcessor& p; const Fonts& f;
     std::vector<ut::Note> pat; int version = -1;
     float flash[2048] {};
     int hoverNote = -1;
+    float zoom = 1.f; // 1, 2 or 4. Wheel scrolls, ctrl-wheel zooms.
+    int scroll = 0;
+    int viewSteps() const { return std::max (16, (int) std::lround ((p.bars() * 16) / std::max (1.f, zoom))); }
     // edit state
     enum Drag { None, Move, Resize, Velocity } drag = None;
     int dragIdx = -1, grabStepOff = 0; ut::Note orig;
@@ -93,6 +101,7 @@ struct Roll : juce::Component
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     // geometry
     juce::Rectangle<float> gridArea() const;
@@ -105,7 +114,7 @@ struct Roll : juce::Component
     void computeRange();
 };
 
-struct DragTile : juce::Component
+struct DragTile : juce::Component, public juce::SettableTooltipClient
 {
     UndertowProcessor& p; const Fonts& f; bool dragging = false;
     DragTile (UndertowProcessor& proc, const Fonts& fonts) : p (proc), f (fonts) { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
@@ -140,8 +149,10 @@ struct Content : juce::Component
     juce::Image grain;
     StyleList styles; PresetBar preset; Roll roll; DragTile drag; Scope scope; SlotBar slotBar { proc, fonts };
     std::vector<std::unique_ptr<Knob>> knobs;
-    juce::ComboBox key, scale, octave, bars, chords, sound;
+    juce::ComboBox key, scale, octave, bars, chords, sound, playMode;
+    juce::Slider kickGap { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> combos;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gapAtt;
     Btn generate { fonts, "GENERATE", Btn::Primary }, mutate { fonts, "VARY" }, undo { fonts, "UNDO" }, redo { fonts, "REDO" },
         play { fonts, "", Btn::Plain }, kick { fonts, "KICK", Btn::Toggle }, lockR { fonts, "RHYTHM", Btn::Toggle }, lockP { fonts, "PITCH", Btn::Toggle },
         exportB { fonts, "EXPORT" }, clear { fonts, "CLEAR" }, evolve { fonts, "EVOLVE", Btn::Toggle }, keyIn { fonts, "MIDI KEY", Btn::Toggle };
@@ -169,5 +180,6 @@ private:
     UndertowProcessor& proc;
     utui::Fonts fonts;
     utui::LnF lnf { fonts };
+    juce::TooltipWindow tips;
     utui::Content content { proc, fonts };
 };

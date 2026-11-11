@@ -71,3 +71,14 @@ a white-noise riser rises. Snap it to 0 on the drop and the tails are cut so the
 A cartoon rocket reacts: chillin' -> building -> screaming -> hovering at 100% -> blasts off on the drop.
 
 ![liftoff](liftoff/docs/liftoff_max.png)
+
+---
+
+# undertow
+
+Bassline generator (VST3 / AU instrument) for house, tech house and UK garage, in `undertow/`.
+Token Wise. Version 2.0.
+
+Pick a style and a key, hit Generate, and you get a bassline that loops like a record: a hook, a variation, a fill. Twelve styles (rolling, offbeat, 2-step, acid, speed garage, afro, deep tech, and the rest), six bass sounds, an editable piano roll, drag-out MIDI, and eighteen factory presets.
+
+The Mac build is a universal (Apple Silicon + Intel) VST3 + AU, packed as a `.pkg` and a zip by the same GitHub Actions workflow. Artifacts: **Undertow-2.0.0-mac** and **Undertow-2.0.0-Installer**.

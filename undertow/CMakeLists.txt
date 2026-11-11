@@ -34,6 +34,10 @@ target_link_libraries(Undertow
     PRIVATE UndertowData juce::juce_audio_utils
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
 
+# Generator invariants. No JUCE, so this can run anywhere the plugin builds.
+add_executable(UndertowGenTest Tests/GenTest.cpp)
+target_compile_features(UndertowGenTest PRIVATE cxx_std_17)
+
 option(UNDERTOW_BUILD_TESTS "Build offline test/screenshot tool" OFF)
 if (UNDERTOW_BUILD_TESTS)
     juce_add_console_app(UndertowShot PRODUCT_NAME "UndertowShot")
@@ -41,6 +45,11 @@ if (UNDERTOW_BUILD_TESTS)
     target_compile_definitions(UndertowShot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JucePlugin_Name="Undertow")
     target_link_libraries(UndertowShot PRIVATE UndertowData juce::juce_audio_utils juce::juce_recommended_config_flags)
 endif()
+
+juce_add_gui_app(UndertowStage PRODUCT_NAME "Undertow" MICROPHONE_PERMISSION_ENABLED FALSE CAMERA_PERMISSION_ENABLED FALSE)
+target_sources(UndertowStage PRIVATE Tests/UndertowStage.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+target_compile_definitions(UndertowStage PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0 JucePlugin_Name="Undertow")
+target_link_libraries(UndertowStage PRIVATE UndertowData juce::juce_audio_utils juce::juce_recommended_config_flags)
 
 option(UNDERTOW_BUILD_DEMO "Build the offline video demo renderer" OFF)
 if (UNDERTOW_BUILD_DEMO)

@@ -17,7 +17,10 @@ static const juce::String DOT = juce::String::fromUTF8 ("\xc2\xb7");
 // ------------------------------------------------------------------ look and feel
 LnF::LnF (const Fonts& fonts) : f (fonts)
 {
-    setColour (juce::ComboBox::textColourId, juce::Colour (0xffdfe7c4));
+    setColour (juce::ComboBox::textColourId, juce::Colour (0xffe9ffc8));
+    setColour (juce::TooltipWindow::backgroundColourId, col::module);
+    setColour (juce::TooltipWindow::textColourId, col::ink);
+    setColour (juce::TooltipWindow::outlineColourId, col::sig);
     setColour (juce::PopupMenu::backgroundColourId, col::module);
     setColour (juce::PopupMenu::textColourId, col::ink);
     setColour (juce::PopupMenu::highlightedBackgroundColourId, col::moduleHi);
@@ -200,35 +203,97 @@ void PresetBar::paint (juce::Graphics& g)
     arrow (18, true); arrow (r.getRight() - 18, false);
     g.setColour (col::edge); g.drawVerticalLine (34, 6, r.getBottom() - 6); g.drawVerticalLine ((int) r.getRight() - 35, 6, r.getBottom() - 6);
     const auto& L = UndertowProcessor::presets();
-    const int i = juce::jlimit (0, (int) L.size() - 1, p.currentPreset);
+    const bool none = p.currentPreset < 0;
+    const int i = none ? 0 : juce::jlimit (0, (int) L.size() - 1, p.currentPreset);
     g.setColour (col::dim); g.setFont (f.n (10.5f));
-    g.drawText (juce::String (i + 1).paddedLeft ('0', 2), 44, 0, 30, getHeight(), juce::Justification::centredLeft);
-    g.setColour (juce::Colour (0xffdfe7c4)); g.setFont (f.s (14));
-    g.drawText (juce::String (L[(size_t) i].name) + (p.presetModified || p.isEdited() ? " *" : ""), 70, 0, getWidth() - 140, getHeight(), juce::Justification::centredLeft);
-    g.setColour (col::dim); g.setFont (f.caps (8.5f));
-    g.drawText ("FACTORY", 0, 0, getWidth() - 46, getHeight(), juce::Justification::centredRight);
+    g.drawText (none ? juce::String ("--") : juce::String (i + 1).paddedLeft ('0', 2), 44, 0, 30, getHeight(), juce::Justification::centredLeft);
+    g.setColour (juce::Colour (0xffe9ffc8)); g.setFont (f.s (14));
+    const juce::String yours = p.activeUserPreset.isNotEmpty() ? p.activeUserPreset : juce::String ("Your bassline");
+    g.drawText (none ? yours : juce::String (L[(size_t) i].name) + (p.presetModified || p.isEdited() ? " *" : ""), 70, 0, getWidth() - 140, getHeight(), juce::Justification::centredLeft);
+    if (! none)
+    {
+        g.setColour (col::dim); g.setFont (f.caps (11.f));
+        g.drawText ("FACTORY", 0, 0, getWidth() - 46, getHeight(), juce::Justification::centredRight);
+    }
 }
 void PresetBar::mouseDown (const juce::MouseEvent& e)
 {
-    if (e.x < 35) { p.applyPreset (p.currentPreset - 1); repaint(); return; }
-    if (e.x > getWidth() - 35) { p.applyPreset (p.currentPreset + 1); repaint(); return; }
+    if (e.x < 35) { p.applyPreset (p.currentPreset < 0 ? (int) UndertowProcessor::presets().size() - 1 : p.currentPreset - 1); repaint(); return; }
+    if (e.x > getWidth() - 35) { p.applyPreset (p.currentPreset < 0 ? 0 : p.currentPreset + 1); repaint(); return; }
+    p.refreshUserPresets();
     juce::PopupMenu m; const auto& L = UndertowProcessor::presets();
+    m.addSectionHeader ("FACTORY");
     for (int i = 0; i < (int) L.size(); ++i) m.addItem (i + 1, L[(size_t) i].name, true, i == p.currentPreset);
+    m.addSeparator();
+    m.addItem (1000, "Save preset...");
+    if (! p.userPresets.empty())
+    {
+        m.addSeparator();
+        m.addSectionHeader ("YOURS");
+        for (int i = 0; i < (int) p.userPresets.size(); ++i)
+        {
+            juce::PopupMenu sub;
+            sub.addItem (2000 + i, "Load");
+            sub.addItem (4000 + i, "Rename");
+            sub.addItem (3000 + i, "Delete");
+            m.addSubMenu (p.userPresets[(size_t) i].name, sub);
+        }
+    }
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMinimumWidth (getWidth()),
-                     [this] (int r) { if (r > 0) { p.applyPreset (r - 1); repaint(); } });
+                     [this] (int r) {
+                         if (r <= 0) return;
+                         if (r < 1000) { p.activeUserPreset.clear(); p.applyPreset (r - 1); repaint(); return; }
+                         if (r == 1000)
+                         {
+                             auto* aw = new juce::AlertWindow ("Save preset", "Name this bassline", juce::AlertWindow::NoIcon);
+                             aw->addTextEditor ("name", p.activeUserPreset.isNotEmpty() ? p.activeUserPreset : "My bassline");
+                             aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+                             aw->addButton ("Cancel", 0);
+                             aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw] (int res) {
+                                 if (res == 1) p.saveUserPreset (aw->getTextEditorContents ("name"));
+                                 repaint();
+                             }), true);
+                             return;
+                         }
+                         if (r >= 4000) { const int i = r - 4000;
+                             auto* aw = new juce::AlertWindow ("Rename preset", "New name", juce::AlertWindow::NoIcon);
+                             aw->addTextEditor ("name", p.userPresets[(size_t) i].name);
+                             aw->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey));
+                             aw->addButton ("Cancel", 0);
+                             aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw, i] (int res) {
+                                 if (res == 1) p.renameUserPreset (i, aw->getTextEditorContents ("name"));
+                                 repaint();
+                             }), true);
+                             return; }
+                         if (r >= 3000) { p.deleteUserPreset (r - 3000); repaint(); return; }
+                         if (r >= 2000) { p.applyUserPreset (r - 2000); repaint(); }
+                     });
 }
 
 // ------------------------------------------------------------------ piano roll (editable)
 juce::Rectangle<float> Roll::gridArea() const { return { 52.f, 76.f, getWidth() - 64.f, getHeight() - 76.f - 66.f - 40.f }; }
 juce::Rectangle<float> Roll::velArea() const { auto gA = gridArea(); return { gA.getX(), gA.getBottom() + 10.f, gA.getWidth(), 56.f }; }
-float Roll::xOfStep (double step) const { auto gA = gridArea(); return gA.getX() + (float) step * gA.getWidth() / (p.bars() * 16); }
-int Roll::stepAt (float x) const { auto gA = gridArea(); return juce::jlimit (0, p.bars() * 16 - 1, (int) std::floor ((x - gA.getX()) / (gA.getWidth() / (p.bars() * 16)))); }
+float Roll::xOfStep (double step) const { auto gA = gridArea(); return gA.getX() + (float) ((step - scroll) * gA.getWidth() / viewSteps()); }
+int Roll::stepAt (float x) const { auto gA = gridArea(); return juce::jlimit (0, p.bars() * 16 - 1, scroll + (int) std::floor ((x - gA.getX()) / (gA.getWidth() / viewSteps()))); }
+void Roll::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    const float d = w.deltaY != 0.f ? w.deltaY : w.deltaX;
+    if (e.mods.isCtrlDown() || e.mods.isCommandDown())
+        zoom = d > 0 ? std::min (4.f, zoom * 2.f) : std::max (1.f, zoom * 0.5f);
+    else
+        scroll -= (int) std::copysign (std::max (4, viewSteps() / 8), d);
+    const int vis = viewSteps();
+    scroll = juce::jlimit (0, std::max (0, p.bars() * 16 - vis), scroll);
+    repaint();
+}
 int Roll::degAt (float y) const { auto gA = gridArea(); const float rh = gA.getHeight() / (hi - lo + 1); return juce::jlimit (lo, hi, hi - (int) std::floor ((y - gA.getY()) / rh)); }
 juce::Rectangle<float> Roll::noteRect (const ut::Note& n) const
 {
-    auto gA = gridArea(); const float rh = gA.getHeight() / (hi - lo + 1), sw = p.swing(), cw = gA.getWidth() / (p.bars() * 16);
+    auto gA = gridArea(); const float rh = gA.getHeight() / (hi - lo + 1), sw = p.swing(), cw = gA.getWidth() / viewSteps();
     const float off = (n.step % 2) ? (sw - 0.5f) * 2.f * cw : 0.f;
-    const float x0 = xOfStep (n.step) + off + 1.f, x1 = xOfStep (n.step + n.len) - 1.f;
+    const int st = (int) p.p ("style");
+    const float pocket = ((n.step % 4) == 2 && (st == ut::Offbeat || st == ut::DeepTech || st == ut::Rolling || st == ut::Minimal)) ? -0.04f * cw : 0.f;
+    const float x0 = xOfStep (n.step) + off + pocket + 1.f, x1 = xOfStep (n.step + n.len) - 1.f;
     return { x0, gA.getY() + (hi - n.deg) * rh + 1.5f, std::max (5.f, x1 - x0), rh - 3.f };
 }
 int Roll::noteAt (juce::Point<float> pt) const
@@ -255,12 +320,16 @@ void Roll::paint (juce::Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
     const int bars = p.bars(), steps = bars * 16, root = p.rootMidi(), sc = p.scale(), key = (int) p.p ("key");
-    auto gA = gridArea(); const float cw = gA.getWidth() / steps, rh = gA.getHeight() / (hi - lo + 1);
+    auto gA = gridArea(); const float cw = gA.getWidth() / viewSteps(), rh = gA.getHeight() / (hi - lo + 1);
     auto scr = b.withTrimmedTop (28);
     g.setColour (col::screen); g.fillRoundedRectangle (scr, 5);
     g.setColour (col::edgeDark); g.drawRoundedRectangle (scr.reduced (0.5f), 5, 1.f);
     g.setColour (juce::Colours::white.withAlpha (0.04f)); g.drawHorizontalLine ((int) scr.getBottom() - 1, scr.getX() + 5, scr.getRight() - 5);
-    g.setColour (col::label); g.setFont (f.caps (10.5f)); g.drawText ("PATTERN", 0, 2, 90, 18, juce::Justification::left);
+    g.setColour (col::label); g.setFont (f.caps (11.f)); g.drawText ("PATTERN", 0, 2, 90, 18, juce::Justification::left);
+    g.setColour (col::dim); g.setFont (f.n (11.f));
+    // the idea slots sit over the right of this header, so only the zoom amount goes here; the wheel hint is in the bottom line
+    if (zoom > 1.01f)
+        g.drawText (juce::String (juce::roundToInt (zoom)) + "x", (int) b.getRight() - 40, 2, 30, 18, juce::Justification::right);
     g.setColour (col::dim); g.setFont (f.n (11));
     int ghosts = 0; for (auto& n : pat) ghosts += n.ghost ? 1 : 0;
     g.drawText (juce::String ((int) pat.size()) + " notes  " + DOT + "  " + juce::String (ghosts) + " ghost  " + DOT + "  " + ut::keyNames[key] + " " + ut::scaleName (sc)
@@ -277,25 +346,31 @@ void Roll::paint (juce::Graphics& g)
     {
         const int sh = roots[std::min (3, bar % std::min (bars, 4))], prevSh = bar > 0 ? roots[std::min (3, (bar - 1) % std::min (bars, 4))] : 999;
         const bool compact = bars >= 8;
-        const int rs = ut::degToSemi (sh, sc), third = ut::degToSemi (sh + 2, sc) - rs, fifth = ut::degToSemi (sh + 4, sc) - rs;
+        const bool spelled = sc == ut::MinorPent || sc == ut::Major || sc == ut::HarmMinor;
+        const int rs = spelled ? ut::chordSemis (sh) : ut::degToSemi (sh, sc);
+        const int third = (spelled ? ut::chordSemis (sh + 2) : ut::degToSemi (sh + 2, sc)) - rs;
+        const int fifth = (spelled ? ut::chordSemis (sh + 4) : ut::degToSemi (sh + 4, sc)) - rs;
         const juce::String q = fifth == 6 ? "dim" : (third == 3 ? "m" : "");
         const float x0 = xOfStep (bar * 16), x1 = xOfStep ((bar + 1) * 16);
         g.setColour (compact && sh == prevSh ? col::faint : col::ink); g.setFont (f.s (compact ? 11.f : 12.5f));
         static const char* flatNames[] = { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" };
         g.drawText (juce::String (flatNames[((key + rs) % 12 + 12) % 12]) + q, (int) x0 + 6, 38, 80, 16, juce::Justification::left);
         static const char* rom[] = { "i", "ii", "iii", "iv", "v", "vi", "vii" };
-        juce::String rn = rom[((sh % 7) + 7) % 7]; if (third == 4) rn = rn.toUpperCase();
+        static const char* byPc[] = { "i", "bii", "ii", "bIII", "III", "iv", "bV", "v", "bVI", "VI", "bVII", "vii" };
+        juce::String rn = spelled ? byPc[(rs % 12 + 12) % 12] : juce::String (rom[((sh % 7) + 7) % 7]);
+        if (! spelled && third == 4) rn = rn.toUpperCase();
         if (! compact) { g.setColour (col::dim); g.setFont (f.n (10)); g.drawText (rn, (int) x1 - 46, 38, 40, 16, juce::Justification::right); }
         if (bar > 0) { g.setColour (bar % 4 == 0 ? col::sigDim : col::screenBar); g.fillRect (x0, 36.f, 1.f, 20.f); }
     }
-    // kick row
+    // kick row follows the style: 4/4, 2-step or broken
     const bool kickOn = p.p ("kick") > 0.5f;
-    for (int bt = 0; bt < bars * 4; ++bt)
+    const int kickStyle = (int) p.p ("style");
+    for (int s = 0; s < steps; ++s) if (ut::isKickStep (kickStyle, s))
     {
-        const float x = xOfStep (bt * 4) + 2.5f;
+        const float x = xOfStep (s) + cw * 0.35f;
         g.setColour (kickOn ? col::sigDim : col::faint); g.fillEllipse (x - 2.5f, gA.getY() - 11, 5, 5);
     }
-    g.setColour (col::dim); g.setFont (f.caps (8)); g.drawText ("KICK", 4, (int) gA.getY() - 15, (int) gA.getX() - 10, 12, juce::Justification::right);
+    g.setColour (col::dim); g.setFont (f.caps (11.f)); g.drawText ("KICK", 4, (int) gA.getY() - 16, (int) gA.getX() - 10, 14, juce::Justification::right);
     for (int d = lo; d <= hi; ++d)
     {
         const float y = gA.getY() + (hi - d) * rh;
@@ -304,7 +379,7 @@ void Roll::paint (juce::Graphics& g)
         g.fillRect (gA.getX(), y, gA.getWidth(), rh);
         if (rh >= 11 || isRoot)
         {
-            g.setColour (isRoot ? col::sigDim : col::dim); g.setFont (f.n (isRoot ? 10.5f : 9.5f));
+            g.setColour (isRoot ? col::sigDim : col::dim); g.setFont (f.n (isRoot ? 12.f : 11.f));
             g.drawText (noteName (root + ut::degToSemi (d, sc)), 4, (int) y, (int) gA.getX() - 10, (int) rh, juce::Justification::right);
         }
     }
@@ -341,7 +416,7 @@ void Roll::paint (juce::Graphics& g)
     auto vA = velArea();
     g.setColour (juce::Colour (0xff0d0f11)); g.fillRect (vA);
     g.setColour (col::screenLine); g.drawHorizontalLine ((int) vA.getY(), vA.getX(), vA.getRight());
-    g.setColour (col::dim); g.setFont (f.caps (8)); g.drawText ("VEL", 4, (int) vA.getY() + 2, (int) vA.getX() - 10, 14, juce::Justification::right);
+    g.setColour (col::dim); g.setFont (f.caps (11.f)); g.drawText ("VEL", 4, (int) vA.getY() + 2, (int) vA.getX() - 10, 14, juce::Justification::right);
     for (size_t i = 0; i < pat.size(); ++i)
     {
         const auto& n = pat[i]; const auto r = noteRect (n);
@@ -357,12 +432,12 @@ void Roll::paint (juce::Graphics& g)
         g.drawText (juce::String (s / 16 + 1) + (s % 16 ? "." + juce::String (s % 16 / 4 + 1) : ""), (int) xOfStep (s) + 3, (int) vA.getBottom() + 4, 40, 14, juce::Justification::left);
     }
     g.setColour (col::dim); g.setFont (f.n (9.5f));
-    g.drawText ("CLICK add  " + DOT + "  DRAG move  " + DOT + "  EDGE resize  " + DOT + "  RIGHT-CLICK delete  " + DOT + "  ALT-CLICK slide  " + DOT + "  VEL lane: drag",
+    g.drawText ("CLICK add  " + DOT + "  DRAG move  " + DOT + "  EDGE resize  " + DOT + "  RIGHT-CLICK delete  " + DOT + "  ALT-CLICK slide  " + DOT + "  VEL lane: drag  " + DOT + "  CTRL-WHEEL zoom",
                 0, getHeight() - 18, getWidth(), 14, juce::Justification::centred);
     const float beat = p.uiBeat.load();
     if (beat >= 0)
     {
-        const float x = gA.getX() + beat * 4 * cw;
+        const float x = xOfStep (beat * 4.0);
         g.setColour (col::sig.withAlpha (0.10f)); g.fillRect (x - 6, gA.getY(), 12.f, vA.getBottom() - gA.getY());
         g.setColour (col::sig); g.fillRect (x - 0.75f, gA.getY() - 14, 1.5f, vA.getBottom() - gA.getY() + 14);
     }
@@ -556,7 +631,10 @@ Content::Content (UndertowProcessor& p, const Fonts& f) : proc (p), fonts (f), s
         c.addItemList (st.getParameter (id)->getAllValueStrings(), 1); addAndMakeVisible (c);
         combos.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (st, id, c));
     };
-    combo (key, "key"); combo (scale, "scale"); combo (octave, "octave"); combo (bars, "bars"); combo (chords, "chords"); combo (sound, "sound");
+    combo (key, "key"); combo (scale, "scale"); combo (octave, "octave"); combo (bars, "bars"); combo (chords, "chords"); combo (sound, "sound"); combo (playMode, "playMode");
+    kickGap.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    addAndMakeVisible (kickGap);
+    gapAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (st, "kickGap", kickGap);
     for (auto* b : { &generate, &mutate, &undo, &redo, &play, &kick, &lockR, &lockP, &exportB, &clear, &evolve, &keyIn }) addAndMakeVisible (*b);
     addAndMakeVisible (slotBar);
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "keyIn", keyIn));
@@ -564,6 +642,39 @@ Content::Content (UndertowProcessor& p, const Fonts& f) : proc (p), fonts (f), s
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "kick", kick));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "lockRhythm", lockR));
     btns.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (st, "lockPitch", lockP));
+    generate.setTooltip ("A new bassline. Low Variation keeps the hook looping.");
+    mutate.setTooltip ("Same groove, a few notes change.");
+    undo.setTooltip ("Back to the previous bassline.");
+    redo.setTooltip ("Forward again.");
+    clear.setTooltip ("Wipe the piano roll.");
+    play.setTooltip ("Preview without the DAW playing. Stops when the DAW starts.");
+    kick.setTooltip ("Preview kick while TRY is running. It stays out of the host and out of bounces. Mute silences it.");
+    kickGap.setTooltip ("Silence before each kick, in the synth and in exported MIDI. 12 ms keeps a held note off the kick.");
+    playMode.setTooltip ("Always: play with the host. Note Held: the pattern plays while a note is held, and that note sets the root. Synth: Undertow plays the MIDI you send it.");
+    roll.setTooltip ("Wheel scrolls the roll. Ctrl-wheel zooms (1x, 2x, 4x).");
+    lockR.setTooltip ("Generate keeps this rhythm and writes new notes.");
+    lockP.setTooltip ("Generate keeps these notes and writes a new rhythm.");
+    exportB.setTooltip ("Save a MIDI file, with swing and slides.");
+    evolve.setTooltip ("Each time the loop comes around, play a new answer. The hook stays.");
+    keyIn.setTooltip ("Off by default. When on, a note-on sets the root inside Undertow. It does not write the Key parameter.");
+    drag.setTooltip ("Drag this onto a clip in FL Studio or Ableton.");
+    for (auto& k : knobs)
+    {
+        const auto lab = k->label;
+        juce::String tip;
+        if (lab == "Density") tip = "How many notes. Low is sparse, high fills the 16ths.";
+        else if (lab == "Movement") tip = "How far the line leaves the root. Low stays on the root and octave.";
+        else if (lab == "Variation") tip = "0 loops the hook. Mid is a two-bar answer. High rewrites the phrase.";
+        else if (lab == "Length") tip = "Short and plucky, or held out.";
+        else if (lab == "Swing") tip = "MPC swing on the off-16ths. Changing style sets a fitting value.";
+        else if (lab == "Glide") tip = "How long a slide takes. Slides are the notes with a dot.";
+        else if (lab == "Ghosts") tip = "Quiet pickup notes into the main hits.";
+        else if (lab == "Accent") tip = "How much louder the offbeat hits than the rest.";
+        else if (lab == "Tone") tip = "Filter brightness. Left is darker.";
+        else if (lab == "Drive") tip = "Warm saturation. The sub stays clean.";
+        else if (lab == "Volume") tip = "Output level.";
+        if (tip.isNotEmpty()) k->s.setTooltip (tip);
+    }
     generate.onClick = [this] { proc.generateNew(); };
     mutate.onClick = [this] { proc.mutate(); };
     undo.onClick = [this] { proc.undo(); };
@@ -607,7 +718,7 @@ void Content::paint (juce::Graphics& g)
     }
     auto wm = fonts.b (24); wm.setExtraKerningFactor (0.06f);
     g.setColour (col::ink); g.setFont (wm); g.drawText ("UNDERTOW", 62, 12, 200, 28, juce::Justification::left);
-    g.setColour (col::label); g.setFont (fonts.caps (9)); g.drawText ("BASSLINE GENERATOR", 63, 40, 200, 12, juce::Justification::left);
+    g.setColour (col::label); g.setFont (fonts.caps (11.f)); g.drawText ("BASSLINE GENERATOR", 63, 40, 220, 14, juce::Justification::left);
     auto tw = fonts.s (12); tw.setExtraKerningFactor (0.14f);
     g.setColour (col::ink.withAlpha (0.9f)); g.setFont (tw); g.drawText ("TOKEN WISE", W - 182, 18, 160, 16, juce::Justification::right);
     g.setColour (col::dim); g.setFont (fonts.n (10)); g.drawText ("v2.0", W - 182, 36, 160, 12, juce::Justification::right);
@@ -617,7 +728,8 @@ void Content::paint (juce::Graphics& g)
     g.drawText ("TEMPO", 968, 76, 60, 12, juce::Justification::left);
     g.setColour (col::ink); g.setFont (fonts.n (17));
     g.drawText (juce::String (proc.bpm.load(), 1), 968, 90, 80, 24, juce::Justification::left);
-    g.setColour (col::dim); g.setFont (fonts.caps (8.5f)); g.drawText (proc.uiBeat.load() >= 0 ? "PLAYING" : "HOST SYNC", 1030, 97, 70, 12, juce::Justification::left);
+    g.setColour (col::dim); g.setFont (fonts.caps (11.f));
+    g.drawText (proc.uiBeat.load() >= 0 ? "PLAYING" : "TRY " + juce::String (ut::styleBpm ((int) proc.p ("style"))), 1030, 96, 90, 14, juce::Justification::left);
     module (g, { 14, 128, 228, 552 }, "STYLE  (GROOVE TYPE)");
     module (g, { 252, 128, 662, 552 }, nullptr);
     module (g, { 924, 128, 242, 172 }, "SHAPE");
@@ -625,18 +737,17 @@ void Content::paint (juce::Graphics& g)
     module (g, { 924, 484, 242, 196 }, "SOUND");
     module (g, { 14, 690, 1152, 76 }, nullptr);
     g.setColour (col::dim); g.setFont (fonts.m (11.5f));
-    g.drawFittedText (ut::styleBlurb ((int) proc.p ("style")), 28, 650, 200, 22, juce::Justification::centredLeft, 1);
+    g.drawFittedText (juce::String (ut::styleBlurb ((int) proc.p ("style"))) + "   " + juce::String (ut::styleBpm ((int) proc.p ("style"))) + " BPM",
+                      28, 648, 200, 26, juce::Justification::centredLeft, 2);
     g.setColour (col::label); g.setFont (fonts.caps (9));
     g.drawText ("LOCK", 600, 722, 40, 12, juce::Justification::left);
     // what each control does, in plain words
-    g.setColour (col::dim); g.setFont (fonts.m (10.5f));
-    g.drawText ("brand-new bassline", 28, 754, 220, 12, juce::Justification::centred);
-    g.drawText ("same groove, new notes", 240, 748, 132, 12, juce::Justification::centred);
-    g.drawText ("keep these when you generate", 636, 748, 190, 12, juce::Justification::centred);
-    g.drawText ("new take every loop", 566, 120, 150, 12, juce::Justification::left);
-    g.drawText ("play a note to change key", 686, 120, 200, 12, juce::Justification::left);
-    g.drawText ("presets: click the name or use the arrows", 390, 51, 400, 12, juce::Justification::centred);
-    g.setColour (col::label); g.setFont (fonts.caps (9)); g.drawText ("PLAYBACK", 567, 76, 120, 12, juce::Justification::left);
+    g.setColour (col::dim); g.setFont (fonts.m (11.f));
+    g.drawText ("brand-new bassline", 28, 754, 220, 14, juce::Justification::centred);
+    g.drawText ("same groove, new notes", 240, 748, 132, 14, juce::Justification::centred);
+    g.drawText ("keep these when you generate", 636, 748, 190, 14, juce::Justification::centred);
+    g.setColour (col::label); g.setFont (fonts.caps (11.f)); g.drawText ("PLAYBACK", 560, 74, 90, 14, juce::Justification::left);
+    g.drawText ("GAP", 856, 74, 50, 14, juce::Justification::left);
 }
 
 void Content::resized()
@@ -646,7 +757,8 @@ void Content::resized()
     bars.setBounds (290, 90, 82, 28); chords.setBounds (380, 90, 170, 28);
     play.setBounds (912, 88, 44, 32);
     kick.setBounds (1094, 88, 70, 32);
-    evolve.setBounds (566, 88, 110, 30); keyIn.setBounds (686, 88, 116, 30);
+    evolve.setBounds (560, 88, 88, 30); keyIn.setBounds (652, 88, 88, 30);
+    playMode.setBounds (744, 88, 100, 30); kickGap.setBounds (856, 102, 52, 14);
     slotBar.setBounds (578, 139, 250, 20);
     styles.setBounds (22, 152, 212, 492);
     roll.setBounds (266, 136, 634, 536);
@@ -673,20 +785,21 @@ void Content::tick()
 }
 
 // ------------------------------------------------------------------ editor (scales the content)
-UndertowEditor::UndertowEditor (UndertowProcessor& p) : AudioProcessorEditor (&p), proc (p)
+UndertowEditor::UndertowEditor (UndertowProcessor& p) : AudioProcessorEditor (&p), proc (p), tips (this, 450)
 {
     setLookAndFeel (&lnf);
+    tips.setLookAndFeel (&lnf);
     addAndMakeVisible (content);
     setResizable (true, true);
     if (auto* c = getConstrainer())
     {
         c->setFixedAspectRatio ((double) utui::Content::W / utui::Content::H);
-        c->setSizeLimits (utui::Content::W * 3 / 4, utui::Content::H * 3 / 4, utui::Content::W * 3 / 2, utui::Content::H * 3 / 2);
+        c->setSizeLimits (utui::Content::W, utui::Content::H, utui::Content::W * 3 / 2, utui::Content::H * 3 / 2);
     }
     setSize (utui::Content::W, utui::Content::H);
     startTimerHz (60);
 }
-UndertowEditor::~UndertowEditor() { proc.internalPlay = false; setLookAndFeel (nullptr); } // closing the window stops the preview
+UndertowEditor::~UndertowEditor() { proc.internalPlay = false; tips.setLookAndFeel (nullptr); setLookAndFeel (nullptr); } // closing the window stops the preview
 void UndertowEditor::resized()
 {
     const float s = (float) getWidth() / utui::Content::W;

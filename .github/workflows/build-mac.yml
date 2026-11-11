@@ -2,8 +2,9 @@ name: Build Glaze (macOS VST3 + AU)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'cursor/**' ]
     tags: [ 'v*' ]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -11,12 +12,15 @@ permissions:
 
 jobs:
   mac:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Ninja
         run: brew install ninja || true
+
+      - name: Undertow generator tests
+        run: c++ -std=c++17 -O2 -o /tmp/undertow-gentest undertow/Tests/GenTest.cpp && /tmp/undertow-gentest
 
       - name: "Configure (universal: Apple Silicon + Intel)"
         run: >
@@ -73,6 +77,16 @@ jobs:
           auval -v aufx Lft1 Glzz
           auval -v aumu Udtw Tkwz
 
+      - name: pluginval (high strictness)
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_macOS.zip
+          unzip -q pluginval.zip
+          VAL=pluginval.app/Contents/MacOS/pluginval
+          "$VAL" --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+            "build-undertow/Undertow_artefacts/Release/VST3/Undertow.vst3"
+          "$VAL" --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+            "build-undertow/Undertow_artefacts/Release/AU/Undertow.component"
+
       - name: Package
         run: |
           A=build/Glaze_artefacts/Release
@@ -97,10 +111,11 @@ jobs:
           U=build-undertow/Undertow_artefacts/Release
           mkdir -p dist/Undertow
           cp -R "$U/VST3/Undertow.vst3" "$U/AU/Undertow.component" dist/Undertow/
-          cp "packaging/Install Undertow.command" dist/Undertow/
+          cp "packaging/Install Undertow.command" "packaging/Uninstall Undertow.command" dist/Undertow/
           cp packaging/README-Undertow.txt dist/Undertow/README.txt
-          chmod +x "dist/Undertow/Install Undertow.command"
-          cd dist && ditto -c -k --keepParent Undertow Undertow-v2-mac.zip && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip && ditto -c -k --keepParent Liftoff Liftoff-mac.zip
+          cp undertow/Resources/OFL-Inter.txt undertow/Resources/OFL-SpaceMono.txt dist/Undertow/
+          chmod +x "dist/Undertow/Install Undertow.command" "dist/Undertow/Uninstall Undertow.command"
+          cd dist && ditto -c -k --keepParent Undertow Undertow-2.0.0-mac.zip && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip && ditto -c -k --keepParent Liftoff Liftoff-mac.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -125,17 +140,17 @@ jobs:
           cp -R "$U/VST3/Undertow.vst3" "$R/VST3/"
           cp -R "$U/AU/Undertow.component" "$R/Components/"
           pkgbuild --root pkgroot --install-location / --identifier com.tokenwise.undertow.pkg --version 2.0.0 \
-            --scripts packaging/undertow-scripts dist/Undertow-v2-Installer.pkg
+            --scripts packaging/undertow-scripts dist/Undertow-2.0.0-Installer.pkg
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Undertow-v2-mac
-          path: dist/Undertow-v2-mac.zip
+          name: Undertow-2.0.0-mac
+          path: dist/Undertow-2.0.0-mac.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Undertow-v2-Installer
-          path: dist/Undertow-v2-Installer.pkg
+          name: Undertow-2.0.0-Installer
+          path: dist/Undertow-2.0.0-Installer.pkg
 
       - name: Publish release (when a v* tag is pushed)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -145,4 +160,49 @@ jobs:
             dist/Glaze-mac.zip
             dist/Pump-mac.zip
             dist/Liftoff-mac.zip
-            dist/Undertow-v2-mac.zip
+            dist/Undertow-2.0.0-mac.zip
+            dist/Undertow-2.0.0-Installer.pkg
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Undertow generator tests
+        shell: bash
+        run: |
+          cmake -S undertow -B build-undertow -A x64
+          cmake --build build-undertow --config Release --target UndertowGenTest
+          ./build-undertow/Release/UndertowGenTest.exe
+
+      - name: Build Undertow (Windows VST3, 64-bit)
+        shell: bash
+        run: cmake --build build-undertow --config Release --target Undertow_VST3
+
+      - name: pluginval (high strictness)
+        shell: bash
+        run: |
+          curl -L -o pluginval.zip https://github.com/Tracktion/pluginval/releases/download/v1.0.4/pluginval_Windows.zip
+          7z x -y pluginval.zip > /dev/null
+          ./pluginval.exe --strictness-level 10 --validate-in-process --timeout-ms 600000 \
+            "build-undertow/Undertow_artefacts/Release/VST3/Undertow.vst3"
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist/Undertow
+          cp -R build-undertow/Undertow_artefacts/Release/VST3/Undertow.vst3 dist/Undertow/
+          cp packaging/README-Undertow.txt dist/Undertow/README.txt
+          cp undertow/Resources/OFL-Inter.txt undertow/Resources/OFL-SpaceMono.txt dist/Undertow/
+          cd dist && 7z a -tzip Undertow-2.0.0-windows.zip Undertow > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Undertow-2.0.0-windows
+          path: dist/Undertow-2.0.0-windows.zip
+
+      - name: Publish release (when a v* tag is pushed)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Undertow-2.0.0-windows.zip
