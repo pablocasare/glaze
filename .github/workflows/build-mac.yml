@@ -111,10 +111,10 @@ jobs:
           U=build-undertow/Undertow_artefacts/Release
           mkdir -p dist/Undertow
           cp -R "$U/VST3/Undertow.vst3" "$U/AU/Undertow.component" dist/Undertow/
-          cp "packaging/Install Undertow.command" dist/Undertow/
+          cp "packaging/Install Undertow.command" "packaging/Uninstall Undertow.command" dist/Undertow/
           cp packaging/README-Undertow.txt dist/Undertow/README.txt
           cp undertow/Resources/OFL-Inter.txt undertow/Resources/OFL-SpaceMono.txt dist/Undertow/
-          chmod +x "dist/Undertow/Install Undertow.command"
+          chmod +x "dist/Undertow/Install Undertow.command" "dist/Undertow/Uninstall Undertow.command"
           cd dist && ditto -c -k --keepParent Undertow Undertow-2.0.0-mac.zip && ditto -c -k --keepParent Glaze Glaze-mac.zip && ditto -c -k --keepParent Pump Pump-mac.zip && ditto -c -k --keepParent Liftoff Liftoff-mac.zip
 
       - uses: actions/upload-artifact@v4

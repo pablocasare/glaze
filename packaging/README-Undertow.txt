@@ -19,10 +19,19 @@ INSTALL (MAC)
   FL Studio: Options > Manage plugins > Find plugins. Look for Undertow.
   Ableton: Preferences > Plug-ins > Rescan. It shows up under Plug-ins > Token Wise.
 
+  Updating: just install the new version over the old one. You don't need to uninstall first.
+
+
 INSTALL (WINDOWS)
   1. Unzip it and copy "Undertow.vst3" into  C:\Program Files\Common Files\VST3
   2. FL Studio: Options > Manage plugins > Find installed plugins. Ableton: rescan plug-ins.
   If Windows SmartScreen warns about the download, click More info > Run anyway / Keep.
+
+UNINSTALL
+  Right-click "Uninstall Undertow.command" and choose Open (or press Open Anyway, as above).
+  It removes every copy (the .pkg install and the zip install). It asks for your Mac
+  password only if the .pkg was used. Projects and saved presets are kept.
+  Windows: just delete Undertow.vst3 from C:\Program Files\Common Files\VST3.
 
 USE
   Load Undertow as an instrument and press play (or hit the play button in the
