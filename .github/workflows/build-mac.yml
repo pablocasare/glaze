@@ -171,7 +171,7 @@ jobs:
       - name: Undertow generator tests
         shell: bash
         run: |
-          cmake -S undertow -B build-undertow -G "Visual Studio 17 2022" -A x64
+          cmake -S undertow -B build-undertow -A x64
           cmake --build build-undertow --config Release --target UndertowGenTest
           ./build-undertow/Release/UndertowGenTest.exe
 
