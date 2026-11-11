@@ -327,8 +327,9 @@ void Roll::paint (juce::Graphics& g)
     g.setColour (juce::Colours::white.withAlpha (0.04f)); g.drawHorizontalLine ((int) scr.getBottom() - 1, scr.getX() + 5, scr.getRight() - 5);
     g.setColour (col::label); g.setFont (f.caps (11.f)); g.drawText ("PATTERN", 0, 2, 90, 18, juce::Justification::left);
     g.setColour (col::dim); g.setFont (f.n (11.f));
-    g.drawText (zoom > 1.01f ? juce::String (juce::roundToInt (zoom)) + "x   ctrl-wheel zoom, wheel scrolls" : "ctrl-wheel zoom, wheel scrolls",
-                (int) b.getRight() - 280, 2, 270, 18, juce::Justification::right);
+    // the idea slots sit over the right of this header, so only the zoom amount goes here; the wheel hint is in the bottom line
+    if (zoom > 1.01f)
+        g.drawText (juce::String (juce::roundToInt (zoom)) + "x", (int) b.getRight() - 40, 2, 30, 18, juce::Justification::right);
     g.setColour (col::dim); g.setFont (f.n (11));
     int ghosts = 0; for (auto& n : pat) ghosts += n.ghost ? 1 : 0;
     g.drawText (juce::String ((int) pat.size()) + " notes  " + DOT + "  " + juce::String (ghosts) + " ghost  " + DOT + "  " + ut::keyNames[key] + " " + ut::scaleName (sc)
@@ -431,7 +432,7 @@ void Roll::paint (juce::Graphics& g)
         g.drawText (juce::String (s / 16 + 1) + (s % 16 ? "." + juce::String (s % 16 / 4 + 1) : ""), (int) xOfStep (s) + 3, (int) vA.getBottom() + 4, 40, 14, juce::Justification::left);
     }
     g.setColour (col::dim); g.setFont (f.n (9.5f));
-    g.drawText ("CLICK add  " + DOT + "  DRAG move  " + DOT + "  EDGE resize  " + DOT + "  RIGHT-CLICK delete  " + DOT + "  ALT-CLICK slide  " + DOT + "  VEL lane: drag",
+    g.drawText ("CLICK add  " + DOT + "  DRAG move  " + DOT + "  EDGE resize  " + DOT + "  RIGHT-CLICK delete  " + DOT + "  ALT-CLICK slide  " + DOT + "  VEL lane: drag  " + DOT + "  CTRL-WHEEL zoom",
                 0, getHeight() - 18, getWidth(), 14, juce::Justification::centred);
     const float beat = p.uiBeat.load();
     if (beat >= 0)

@@ -1,7 +1,8 @@
 UNDERTOW 2.0 - bassline generator by Token Wise
-VST3 + AU instrument. Mac, Apple Silicon and Intel. Unsigned early-access build.
+VST3 + AU instrument. Mac (Apple Silicon and Intel) and Windows (VST3, 64-bit).
+Unsigned early-access build.
 
-INSTALL
+INSTALL (MAC)
   Easiest: double-click the .pkg installer and follow the prompts. It puts
   Undertow where every DAW looks (a password is normal; it installs for all users).
 
@@ -17,6 +18,11 @@ INSTALL
   Then:
   FL Studio: Options > Manage plugins > Find plugins. Look for Undertow.
   Ableton: Preferences > Plug-ins > Rescan. It shows up under Plug-ins > Token Wise.
+
+INSTALL (WINDOWS)
+  1. Unzip it and copy "Undertow.vst3" into  C:\Program Files\Common Files\VST3
+  2. FL Studio: Options > Manage plugins > Find installed plugins. Ableton: rescan plug-ins.
+  If Windows SmartScreen warns about the download, click More info > Run anyway / Keep.
 
 USE
   Load Undertow as an instrument and press play (or hit the play button in the
@@ -102,3 +108,5 @@ STYLES
 The bassline is saved with your project as the actual notes, so reopening the
 session brings the same one back even after an update. A generator control
 (or GENERATE / VARY) is what rolls a new one.
+
+Fonts: Inter and Space Mono, SIL Open Font License 1.1 (OFL-Inter.txt, OFL-SpaceMono.txt).
