@@ -23,6 +23,7 @@ struct Voice
     int note = -1, pendingNote = -1;
     float vel = 1, pendingVel = 0;
     float ic1 = 0, ic2 = 0, ic1R = 0, ic2R = 0; // SVF, left and right
+    float midEnv = 0, hpX = 0, hpY = 0;        // mid (pluck) layer: decay envelope + high-pass state
     float dcX = 0, dcY = 0, dcXR = 0, dcYR = 0;
     void noteOn (int n, float v, bool slide, float glideMs);
     void noteOff (int n)
@@ -164,7 +165,7 @@ private:
     double sr = 44100, internalPpq = 0; bool wasPlaying = false;
     int sounding = -1;
     uint64_t soundingLo = 0, soundingHi = 0; // MIDI pitches actually held, so a pattern swap can release them
-    float duck = 1, duckGoal = 1;
+    float duck = 1, duckGoal = 1; // kick sidechain: smooth 2 ms down, ~60 ms back up
     int duckHold = 0;
     int midiLatch = -1; // root from MIDI, not written back to the host key parameter
     bool applyingFeel = false;

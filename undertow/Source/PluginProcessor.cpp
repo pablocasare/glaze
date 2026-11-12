@@ -30,17 +30,20 @@ void Voice::noteOn (int n, float v, bool slide, float glideMs)
 void Voice::startNow (int n, float v)
 {
     freq = target; glideCoef = 1.f;
-    pitchEnv = 1.f; fenv = 0.f; perc = 1.f;
+    pitchEnv = 1.f; fenv = 0.f; perc = 1.f; midEnv = 1.f;
     ic1 = ic2 = ic1R = ic2R = 0;
     note = n; vel = v; gate = true; arm = false; pendingNote = -1;
 }
 
+// Bounded saturation: unity-ish for small signals, never above 1 for |x| <= 1.
+// The old version divided by tanh (0.72 g), which pushed a full-scale input to ~1.07-1.6x
+// (gain, not saturation) and drove up to 4.2x into tanh, so the voice itself sat at full scale.
 static float warmSat (float x, float amount)
 {
-    const float g = 1.f + amount * 4.2f;
-    float y = x * g;
-    y += 0.16f * amount * y * std::abs (y); // a little even-harmonic warmth, not fizz
-    return std::tanh (y) / std::tanh (g * 0.72f);
+    const float g = 1.f + amount * 2.0f;
+    float y = juce::jlimit (-1.5f, 1.5f, x) * g;
+    y += 0.08f * amount * y * std::abs (y); // a touch of even-harmonic warmth
+    return std::tanh (y) / std::tanh (g * 1.08f);
 }
 static float svfLow (float x, float g, float k, float& ic1, float& ic2)
 {
@@ -53,25 +56,29 @@ static float svfLow (float x, float g, float k, float& ic1, float& ic2)
 
 void Voice::render (int sound, float cutOff, float drive, float& left, float& right)
 {
+    // Two layers: a clean mono sine SUB (never filtered or driven hard) and a MID layer
+    // (saw/square through the SVF, high-passed at ~90 Hz, gently driven, with its own pluck decay).
     // sub, saw, square, detune, cutoff Hz, resonance, filter env (oct), env decay, drive, pitch drop (semitones),
-    // attack, release, output trim. Reese and Growl get a little stereo above the mono sub.
-    struct R { float sub, saw, sq, det, cut, res, env, dec, drv, pe, atk, rel, trim; int wide; };
+    // attack, release, output trim, mid saw, mid pluck decay (s), mid sustain level. Reese and Growl get stereo in the mid only.
+    struct R { float sub, saw, sq, det, cut, res, env, dec, drv, pe, atk, rel, trim, mid, mdec, msus; int wide; };
     static const R rec[] = {
-        { 1.00f, 0.00f, 0.00f, 0.00f,  200, 0.06f, 0.45f, 0.06f, 0.16f, 0.8f, 0.0030f, 0.060f, 1.02f, 0 }, // Sub: a thump, then it sits in tune
-        { 0.95f, 0.00f, 0.30f, 0.00f,  380, 0.46f, 2.80f, 0.07f, 0.24f, 5.5f, 0.0010f, 0.024f, 0.88f, 0 }, // Rubber
-        { 0.78f, 0.48f, 0.00f, 0.022f, 520, 0.20f, 1.05f, 0.30f, 0.34f, 0.0f, 0.0050f, 0.060f, 0.78f, 1 }, // Reese
-        { 1.00f, 0.00f, 0.00f, 0.00f, 1600, 0.05f, 0.20f, 0.16f, 0.14f, 0.0f, 0.0025f, 0.075f, 0.86f, 0 }, // Organ
-        { 0.48f, 0.78f, 0.00f, 0.00f,  210, 0.70f, 4.20f, 0.16f, 0.36f, 1.4f, 0.0016f, 0.028f, 0.72f, 0 }, // Acid
-        { 0.72f, 0.38f, 0.28f, 0.012f, 360, 0.42f, 1.80f, 0.18f, 0.48f, 2.4f, 0.0030f, 0.038f, 0.70f, 1 } }; // Growl
+        { 1.00f, 0.00f, 0.00f, 0.00f,  200, 0.12f, 0.90f, 0.08f, 0.18f, 0.0f, 0.0030f, 0.030f, 0.95f, 0.60f, 0.090f, 0.10f, 0 }, // Sub: clean sub + soft pluck on top
+        { 0.95f, 0.00f, 0.26f, 0.00f,  220, 0.18f, 1.10f, 0.09f, 0.22f, 2.0f, 0.0020f, 0.024f, 0.80f, 0.45f, 0.110f, 0.18f, 0 }, // Rubber
+        { 0.85f, 0.48f, 0.00f, 0.022f, 520, 0.20f, 1.05f, 0.30f, 0.30f, 0.0f, 0.0050f, 0.060f, 0.82f, 0.00f, 0.300f, 0.80f, 1 }, // Reese
+        { 1.00f, 0.00f, 0.00f, 0.00f, 1600, 0.05f, 0.20f, 0.16f, 0.14f, 0.0f, 0.0025f, 0.075f, 0.86f, 0.00f, 0.200f, 1.00f, 0 }, // Organ
+        { 0.60f, 0.78f, 0.00f, 0.00f,  210, 0.62f, 3.60f, 0.16f, 0.32f, 1.0f, 0.0020f, 0.028f, 0.76f, 0.00f, 0.250f, 0.70f, 0 }, // Acid
+        { 0.80f, 0.38f, 0.28f, 0.012f, 360, 0.40f, 1.80f, 0.18f, 0.40f, 1.6f, 0.0030f, 0.038f, 0.74f, 0.00f, 0.250f, 0.80f, 1 } }; // Growl
     const R& r = rec[juce::jlimit (0, 5, sound)];
 
     if (arm)
     {
-        amp *= std::exp (-1.f / (0.0004f * (float) sr));
-        if (amp < 0.02f && pendingNote >= 0) startNow (pendingNote, pendingVel);
+        // 1.5 ms fade before a retrigger (was 0.4 ms, an audible tick on every rolling 16th)
+        amp *= std::exp (-1.f / (0.0015f * (float) sr));
+        if (amp < 0.004f && pendingNote >= 0) startNow (pendingNote, pendingVel);
     }
 
-    const float atk = gate ? (1.f - std::exp (-1.f / (r.atk * (float) sr))) : (1.f - std::exp (-1.f / (r.rel * (float) sr)));
+    const float atkT = std::max (0.002f, r.atk), relT = std::max (0.015f, r.rel); // no hard edges
+    const float atk = gate ? (1.f - std::exp (-1.f / (atkT * (float) sr))) : (1.f - std::exp (-1.f / (relT * (float) sr)));
     amp += ((gate ? 1.f : 0.f) - amp) * atk;
     if (! gate && amp < 1.0e-5f && ! arm)
     {
@@ -89,6 +96,7 @@ void Voice::render (int sound, float cutOff, float drive, float& left, float& ri
     fenv += ((gate && fenv < 0.98f ? 1.f : 0.f) - fenv) * (fenv < 0.98f && gate ? (1.f - std::exp (-1.f / (0.0025f * (float) sr))) : 0.f);
     if (! (gate && fenv < 0.98f)) fenv *= std::exp (-1.f / (r.dec * (float) sr));
     perc *= std::exp (-1.f / (0.045f * (float) sr));
+    midEnv = r.msus + (midEnv - r.msus) * std::exp (-1.f / (r.mdec * (float) sr));
     lfo += 0.18 / sr; if (lfo >= 1) lfo -= 1;
     growl += (sound == 5 ? 31.0 : 0.0) / sr; if (growl >= 1) growl -= 1;
 
@@ -117,8 +125,9 @@ void Voice::render (int sound, float cutOff, float drive, float& left, float& ri
         wrap (phase3, dt * d2);
 
         const float sub = (float) std::sin (juce::MathConstants<double>::twoPi * subPhase);
-        float mono = r.sub * sub;
-        if (sound == 0) mono += 0.07f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2.0); // a little warmth, still a sub
+        float subL = r.sub * sub;   // clean sine sub, mono
+        float mono = 0;             // mid layer
+        if (sound == 0) subL += 0.10f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2.0); // a little warmth, still a sub
         if (sound == 3)
         {
             mono += 0.40f * (float) std::sin (juce::MathConstants<double>::twoPi * subPhase * 2.0);
@@ -147,9 +156,19 @@ void Voice::render (int sound, float cutOff, float drive, float& left, float& ri
             else mono += r.saw * s1;
         }
         if (r.sq > 0) mono += r.sq * squareAt (phase, dt);
+        if (r.mid > 0) mono += r.mid * sawAt (phase, dt);
+        if (sound == 3) { subL = (subL + mono) * 0.55f; mono = 0; } // organ harmonics live with the sub, scaled so the drawbars can't sum past 1
+        mono *= 1.f / std::max (1.f, r.saw + r.sq + r.mid); // per-layer gain staging: summed oscillators can't exceed 1
 
-        const float m = warmSat (svfLow (mono, g, k, ic1, ic2), satAmt);
-        const float sd = r.wide ? warmSat (svfLow (side, g, k, ic1R, ic2R), satAmt * 0.5f) : 0.f;
+        float mid = svfLow (mono, g, k, ic1, ic2);
+        // one-pole high-pass ~90 Hz keeps the mid layer out of the sub's way (sub stays clean and mono)
+        const float hpA = 1.f / (1.f + juce::MathConstants<float>::twoPi * 90.f / (float) os);
+        const float hpOut = hpA * (hpY + mid - hpX); hpX = mid; hpY = hpOut;
+        if (r.saw + r.sq + r.mid > 0) mid = hpOut * 1.2f;
+        mid = warmSat (mid * midEnv, satAmt) * 1.35f;
+        const float subOut = warmSat (subL * 0.92f, 0.12f) * 0.80f;
+        const float m = subOut + mid;
+        const float sd = r.wide ? warmSat (svfLow (side, g, k, ic1R, ic2R), satAmt * 0.5f) * 0.5f : 0.f;
         accL += m + sd; accR += m - sd;
     }
 
@@ -167,7 +186,8 @@ float Kick::render()
     const double f = tune + tune * 2.6 * std::exp (-t / 0.030);
     ph += f / sr;
     float y = (float) std::sin (juce::MathConstants<double>::twoPi * ph) * (float) std::exp (-t / 0.20);
-    y += (t < 0.0025 ? 0.28f * (float) (1.0 - t / 0.0025) : 0.f);
+    // short tuned click instead of a 2.5 ms DC ramp (the ramp was a step at the hit)
+    y += 0.20f * (float) (std::exp (-t / 0.0011) * std::sin (juce::MathConstants<double>::twoPi * 1700.0 * t));
     t += 1.0 / sr;
     return std::tanh (1.5f * y) * 0.62f;
 }
@@ -683,7 +703,8 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
         while (kickHz < 45.f) kickHz *= 2.f;
         while (kickHz > 64.f) kickHz *= 0.5f;
     }
-    const float duckCoef = 1.f - std::exp (-1.f / (0.002f * (float) std::max (1.0, sr))); // 2 ms, click-free
+    const float duckCoef = 1.f - std::exp (-1.f / (0.002f * (float) std::max (1.0, sr)));  // 2 ms down, click-free
+    const float duckRel  = 1.f - std::exp (-1.f / (0.060f * (float) std::max (1.0, sr)));  // ~60 ms back up, no pumping tick
     bool patternGate = mode != 1 || heldCount > 0;
     for (int i = 0; i < n; ++i)
     {
@@ -725,21 +746,24 @@ void UndertowProcessor::processBlock (juce::AudioBuffer<float>& buf, juce::MidiB
                 }
                 ++hi;
             }
-        while (ki < nKicks && kickAt[ki] <= i) { if (kickOn) { kick.trig (kickHz); duckGoal = 0.55f; duckHold = (int) (0.010 * sr); } ++ki; }
+        while (ki < nKicks && kickAt[ki] <= i) { if (kickOn) { kick.trig (kickHz); duckGoal = 0.65f; duckHold = (int) (0.010 * sr); } ++ki; }
         if (duckHold > 0) --duckHold; else duckGoal = 1.f;
         if (! kickOn) duckGoal = 1.f;
-        duck += (duckGoal - duck) * duckCoef;
+        duck += (duckGoal - duck) * (duckGoal < duck ? duckCoef : duckRel);
         float ls = 0, rs = 0;
         voice.render (sound, tone, drv, ls, rs);
         if (muted) ls = rs = 0;
         else { ls *= gain; rs *= gain; }
         if (kickOn) { ls *= duck; rs *= duck; }
         const float k = kickOn ? kick.render() * 0.42f : 0.f;
+        // Soft limiter with real headroom: linear to -5 dBFS, then a smooth knee that can never pass
+        // -1.2 dBFS (0.87). The old curve was linear to 0.9 and ran up to 1.0, so loud settings hit 0 dBFS.
         auto ceiling = [] (float x) {
-            const float a = 0.9f;
-            if (std::abs (x) <= a) return x;
+            const float knee = 0.56f, top = 0.87f;
+            const float ax = std::abs (x);
+            if (ax <= knee) return x;
             const float s = x > 0.f ? 1.f : -1.f;
-            return s * (a + (1.f - a) * std::tanh ((std::abs (x) - a) * 2.5f));
+            return s * (knee + (top - knee) * std::tanh ((ax - knee) / (top - knee)));
         };
         Lch[i] = ceiling (ls + k); if (Rch) Rch[i] = ceiling (rs + k);
         peak = std::max (peak, std::abs (ls));
